@@ -17,6 +17,7 @@ class CameraViewModel: NSObject, ObservableObject {
     @Published var isSessionRunning = false
     @Published var cameraError: String?
     @Published var debugInfo = ""
+    @Published var currentPoseFrame: PoseFrame?
     
     // Swing type tracking
     @Published var forehandCount = 0
@@ -27,30 +28,129 @@ class CameraViewModel: NSObject, ObservableObject {
     private var videoOutput: AVCaptureVideoDataOutput?
     private let sessionQueue = DispatchQueue(label: "sessionQueue")
     
-    // Motion detection for swing
-    private var previousPixelBuffer: CVPixelBuffer?
-    private var motionHistory: [(zone: String, motion: Int)] = []
-    private var isInSwingMotion = false
-    private var swingStartTime: Date?
-    private let ciContext = CIContext()
+    // Vision service for pose detection
+    private let visionService = VisionService()
     
     // Timing tracking
     private var sessionStartTime: Date?
     private var lastShotTime: Date?
     private var shotTimings: [TimeInterval] = []
     
-    // Motion zones for different swing types
-    private let zones = [
-        "topLeft": CGRect(x: 0.0, y: 0.0, width: 0.5, height: 0.5),
-        "topRight": CGRect(x: 0.5, y: 0.0, width: 0.5, height: 0.5),
-        "bottomLeft": CGRect(x: 0.0, y: 0.5, width: 0.5, height: 0.5),
-        "bottomRight": CGRect(x: 0.5, y: 0.5, width: 0.5, height: 0.5),
-        "center": CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
-    ]
+    // Swing detection cooldown to prevent double-counting
+    private var lastSwingDetectionTime: Date?
+    private let swingCooldownInterval: TimeInterval = 1.0 // 1 second between swings
     
     override init() {
         super.init()
         setupSession()
+        setupVisionCallbacks()
+    }
+    
+    private func setupVisionCallbacks() {
+        // Handle swing detection
+        visionService.onSwingDetected = { [weak self] swingType, duration in
+            self?.handleSwingDetection(type: swingType, duration: duration)
+        }
+        
+        // Handle pose updates for visualization
+        visionService.onPoseDetected = { [weak self] poseFrame in
+            DispatchQueue.main.async {
+                self?.currentPoseFrame = poseFrame
+            }
+        }
+        
+        // Handle debug messages
+        visionService.debugCallback = { [weak self] message in
+            DispatchQueue.main.async {
+                self?.debugInfo = message
+            }
+        }
+    }
+    
+    private func handleSwingDetection(type: SwingType, duration: TimeInterval) {
+        // Check cooldown to prevent double-counting
+        if let lastTime = lastSwingDetectionTime,
+           Date().timeIntervalSince(lastTime) < swingCooldownInterval {
+            return
+        }
+        
+        lastSwingDetectionTime = Date()
+        
+        // Track shot timing
+        if let lastShot = lastShotTime {
+            let interval = Date().timeIntervalSince(lastShot)
+            shotTimings.append(interval)
+        }
+        lastShotTime = Date()
+        
+        DispatchQueue.main.async {
+            self.totalShots += 1
+            
+            // Update swing type counts
+            switch type {
+            case .forehand:
+                self.forehandCount += 1
+            case .backhand:
+                self.backhandCount += 1
+            case .serve:
+                self.serveCount += 1
+            case .unknown:
+                break
+            }
+            
+            // Evaluate swing quality
+            let (isSuccess, feedback) = self.evaluateSwingQuality(type: type, duration: duration)
+            
+            if isSuccess {
+                self.successfulShots += 1
+                AudioServicesPlaySystemSound(1057) // Success sound
+            } else {
+                AudioServicesPlaySystemSound(1053) // Error sound
+            }
+            
+            self.debugInfo = feedback
+            
+            // Haptic feedback
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
+        }
+    }
+    
+    private func evaluateSwingQuality(type: SwingType, duration: TimeInterval) -> (success: Bool, feedback: String) {
+        var isSuccess = true
+        var feedback = "\(type.rawValue) detected!"
+        
+        switch type {
+        case .serve:
+            // Serves should have longer preparation
+            if duration < 0.8 {
+                isSuccess = false
+                feedback += " - Take more time on preparation"
+            } else if duration > 2.5 {
+                isSuccess = false
+                feedback += " - Too slow, increase racket speed"
+            } else {
+                feedback += " - Good rhythm!"
+            }
+            
+        case .forehand, .backhand:
+            // Ground strokes should be fluid and quick
+            if duration < 0.4 {
+                isSuccess = false
+                feedback += " - Too rushed, focus on form"
+            } else if duration > 1.5 {
+                isSuccess = false
+                feedback += " - Speed up your swing"
+            } else {
+                feedback += " - Nice stroke!"
+            }
+            
+        case .unknown:
+            isSuccess = false
+            feedback = "Unclear swing - ensure full body is visible"
+        }
+        
+        return (isSuccess, feedback)
     }
     
     func checkPermissions() {
@@ -129,10 +229,10 @@ class CameraViewModel: NSObject, ObservableObject {
         backhandCount = 0
         serveCount = 0
         shotTimings.removeAll()
-        motionHistory.removeAll()
         sessionStartTime = Date()
         lastShotTime = nil
-        debugInfo = "Ready - Make your swing!"
+        lastSwingDetectionTime = nil
+        debugInfo = "Ready - Show your full body for best tracking"
     }
     
     func stopRecording() -> SessionData {
@@ -152,7 +252,7 @@ class CameraViewModel: NSObject, ObservableObject {
     }
 }
 
-// MARK: - Swing Type Detection
+// MARK: - Video Frame Processing
 extension CameraViewModel: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard isRecording,
@@ -160,232 +260,7 @@ extension CameraViewModel: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
         
-        detectSwingMotion(in: pixelBuffer)
-    }
-    
-    private func detectSwingMotion(in pixelBuffer: CVPixelBuffer) {
-        let currentImage = CIImage(cvPixelBuffer: pixelBuffer)
-        
-        guard let previousBuffer = previousPixelBuffer else {
-            previousPixelBuffer = pixelBuffer
-            return
-        }
-        
-        let previousImage = CIImage(cvPixelBuffer: previousBuffer)
-        
-        // Calculate motion in each zone
-        var zoneMotions: [(zone: String, motion: Int)] = []
-        
-        for (zoneName, zoneRect) in zones {
-            let motion = calculateMotionInZone(current: currentImage, previous: previousImage, zone: zoneRect)
-            if motion > 20 { // Only track significant motion
-                zoneMotions.append((zone: zoneName, motion: motion))
-            }
-        }
-        
-        // Add to motion history
-        if let strongestMotion = zoneMotions.max(by: { $0.motion < $1.motion }) {
-            motionHistory.append(strongestMotion)
-            if motionHistory.count > 30 { // Keep last 0.5 seconds
-                motionHistory.removeFirst()
-            }
-        }
-        
-        // Analyze pattern
-        analyzeSwingPattern()
-        
-        // Update previous frame
-        previousPixelBuffer = pixelBuffer
-    }
-    
-    private func calculateMotionInZone(current: CIImage, previous: CIImage, zone: CGRect) -> Int {
-        guard let diffFilter = CIFilter(name: "CIDifferenceBlendMode") else { return 0 }
-        diffFilter.setValue(previous, forKey: kCIInputImageKey)
-        diffFilter.setValue(current, forKey: kCIInputBackgroundImageKey)
-        
-        guard let outputImage = diffFilter.outputImage else { return 0 }
-        
-        // Calculate zone rectangle
-        let extent = outputImage.extent
-        let zoneRect = CGRect(
-            x: extent.width * zone.origin.x,
-            y: extent.height * zone.origin.y,
-            width: extent.width * zone.width,
-            height: extent.height * zone.height
-        )
-        
-        guard let avgFilter = CIFilter(name: "CIAreaAverage") else { return 0 }
-        avgFilter.setValue(outputImage, forKey: kCIInputImageKey)
-        avgFilter.setValue(CIVector(cgRect: zoneRect), forKey: "inputExtent")
-        
-        guard let avgOutput = avgFilter.outputImage else { return 0 }
-        
-        var bitmap = [UInt8](repeating: 0, count: 4)
-        ciContext.render(avgOutput,
-                        toBitmap: &bitmap,
-                        rowBytes: 4,
-                        bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-                        format: .RGBA8,
-                        colorSpace: nil)
-        
-        return Int(bitmap[0]) + Int(bitmap[1]) + Int(bitmap[2])
-    }
-    
-    private func analyzeSwingPattern() {
-        guard motionHistory.count >= 15 else { return }
-        
-        let totalMotion = motionHistory.suffix(15).reduce(0) { $0 + $1.motion }
-        guard totalMotion > 500 else { return } // Minimum motion threshold
-        
-        if !isInSwingMotion {
-            isInSwingMotion = true
-            swingStartTime = Date()
-            
-            DispatchQueue.main.async {
-                self.debugInfo = "Swing detected! Analyzing type..."
-            }
-            
-        } else if let startTime = swingStartTime, Date().timeIntervalSince(startTime) > 0.5 {
-            // Analyze swing type based on motion pattern
-            let swingType = detectSwingType()
-            
-            // Register the swing
-            registerSwing(type: swingType, duration: Date().timeIntervalSince(startTime))
-            
-            isInSwingMotion = false
-            swingStartTime = nil
-            motionHistory.removeAll()
-        }
-    }
-    
-    private func detectSwingType() -> SwingType {
-        // Analyze motion pattern across zones
-        let recentMotions = motionHistory.suffix(20)
-        
-        // Count motion in each zone
-        var zoneCounts: [String: Int] = [:]
-        var totalMotionByZone: [String: Int] = [:]
-        
-        for (zone, motion) in recentMotions {
-            zoneCounts[zone, default: 0] += 1
-            totalMotionByZone[zone, default: 0] += motion
-        }
-        
-        // Detect patterns:
-        
-        // SERVE: Strong motion starting from top zones
-        let topMotion = (totalMotionByZone["topLeft"] ?? 0) + (totalMotionByZone["topRight"] ?? 0)
-        let bottomMotion = (totalMotionByZone["bottomLeft"] ?? 0) + (totalMotionByZone["bottomRight"] ?? 0)
-        
-        if topMotion > bottomMotion * 2 {
-            // Check if motion starts high and goes down (serve pattern)
-            let firstHalf = Array(recentMotions.prefix(10))
-            let secondHalf = Array(recentMotions.suffix(10))
-            
-            let firstHalfTop = firstHalf.filter { $0.zone.contains("top") }.count
-            let secondHalfBottom = secondHalf.filter { $0.zone.contains("bottom") }.count
-            
-            if firstHalfTop > 5 && secondHalfBottom > 3 {
-                return .serve
-            }
-        }
-        
-        // FOREHAND vs BACKHAND: Based on left-right motion pattern
-        let leftMotion = (totalMotionByZone["topLeft"] ?? 0) + (totalMotionByZone["bottomLeft"] ?? 0)
-        let rightMotion = (totalMotionByZone["topRight"] ?? 0) + (totalMotionByZone["bottomRight"] ?? 0)
-        
-        // For right-handed player:
-        // Forehand: Motion from right to left (across body)
-        // Backhand: Motion from left to right
-        
-        if Double(rightMotion) > Double(leftMotion) * 1.3 {
-            // Check motion progression
-            let motionProgression = recentMotions.map { $0.zone }
-            let rightToLeftCount = countTransitions(in: motionProgression, from: "Right", to: "Left")
-            let leftToRightCount = countTransitions(in: motionProgression, from: "Left", to: "Right")
-            
-            if rightToLeftCount > leftToRightCount {
-                return .forehand
-            }
-        } else if Double(leftMotion) > Double(rightMotion) * 1.3 {
-            return .backhand
-        }
-        
-        // Default to forehand if pattern unclear
-        return .forehand
-    }
-    
-    private func countTransitions(in zones: [String], from: String, to: String) -> Int {
-        var count = 0
-        for i in 0..<(zones.count - 1) {
-            if zones[i].contains(from) && zones[i + 1].contains(to) {
-                count += 1
-            }
-        }
-        return count
-    }
-    
-    private func registerSwing(type: SwingType, duration: TimeInterval) {
-        // Track shot timing
-        if let lastShot = lastShotTime {
-            let interval = Date().timeIntervalSince(lastShot)
-            shotTimings.append(interval)
-        }
-        lastShotTime = Date()
-        
-        DispatchQueue.main.async {
-            self.totalShots += 1
-            
-            // Update swing type counts
-            switch type {
-            case .forehand:
-                self.forehandCount += 1
-            case .backhand:
-                self.backhandCount += 1
-            case .serve:
-                self.serveCount += 1
-            case .unknown:
-                break
-            }
-            
-            // Success criteria based on swing type
-            var isSuccess = true
-            var feedback = "\(type.rawValue) detected!"
-            
-            // Different criteria for different swings
-            switch type {
-            case .serve:
-                // Serves should be longer, more vertical motion
-                if duration < 0.6 {
-                    isSuccess = false
-                    feedback += " - Full motion needed"
-                }
-            case .forehand, .backhand:
-                // Ground strokes should be quicker
-                if duration > 1.0 {
-                    isSuccess = false
-                    feedback += " - Too slow"
-                } else if duration < 0.3 {
-                    isSuccess = false
-                    feedback += " - Too rushed"
-                }
-            case .unknown:
-                isSuccess = false
-                feedback = "Unclear swing - try again"
-            }
-            
-            if isSuccess {
-                self.successfulShots += 1
-                AudioServicesPlaySystemSound(1057) // Success
-            } else {
-                AudioServicesPlaySystemSound(1053) // Error
-            }
-            
-            self.debugInfo = feedback
-            
-            // Haptic feedback
-            let impact = UIImpactFeedbackGenerator(style: .medium)
-            impact.impactOccurred()
-        }
+        // Send frame to Vision service for pose detection
+        visionService.processFrame(pixelBuffer)
     }
 }
