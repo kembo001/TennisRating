@@ -29,7 +29,38 @@ struct ResultsView: View {
                     StatRow(title: "Total Shots", value: "\(sessionData.totalShots)")
                     StatRow(title: "Successful Shots", value: "\(sessionData.successfulShots)")
                     StatRow(title: "Success Rate", value: String(format: "%.0f%%", sessionData.successRate * 100))
-                    StatRow(title: "Session Time", value: sessionData.timestamp.formatted(date: .omitted, time: .shortened))
+                    StatRow(title: "Duration", value: formatDuration(sessionData.sessionDuration))
+                    
+                    // Swing type breakdown
+                    if sessionData.totalShots > 0 {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Shot Breakdown")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
+                            
+                            HStack {
+                                Label("\(sessionData.forehandCount)", systemImage: "arrow.right.circle.fill")
+                                    .foregroundColor(.blue)
+                                Text("Forehands")
+                                Spacer()
+                            }
+                            
+                            HStack {
+                                Label("\(sessionData.backhandCount)", systemImage: "arrow.left.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Backhands")
+                                Spacer()
+                            }
+                            
+                            HStack {
+                                Label("\(sessionData.serveCount)", systemImage: "arrow.up.circle.fill")
+                                    .foregroundColor(.orange)
+                                Text("Serves")
+                                Spacer()
+                            }
+                        }
+                        .padding(.top, 10)
+                    }
                 }
                 .padding()
                 .background(Color.gray.opacity(0.1))
@@ -41,6 +72,24 @@ struct ResultsView: View {
                     .font(.headline)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
+                
+                // Practice tips based on performance
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Practice Tips:")
+                        .font(.headline)
+                    
+                    ForEach(getPracticeTips(), id: \.self) { tip in
+                        HStack(alignment: .top) {
+                            Text("•")
+                            Text(tip)
+                                .font(.subheadline)
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(10)
+                .padding(.horizontal)
                 
                 Spacer()
                 
@@ -92,6 +141,43 @@ struct ResultsView: View {
         default:
             return "Every champion started somewhere. Keep going!"
         }
+    }
+    
+    func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+    
+    func getPracticeTips() -> [String] {
+        var tips: [String] = []
+        
+        // Tips based on success rate
+        if sessionData.successRate < 0.5 {
+            tips.append("Focus on control over power - aim for consistency")
+        }
+        
+        // Tips based on volume
+        if sessionData.totalShots < 20 {
+            tips.append("Try longer practice sessions (aim for 50+ shots)")
+        }
+        
+        // Tips based on consistency
+        if sessionData.consistencyRating < 0.7 {
+            tips.append("Work on rhythm - try to maintain steady shot intervals")
+        }
+        
+        // Tips based on shots per minute
+        if sessionData.shotsPerMinute < 5 {
+            tips.append("Increase practice intensity with quicker ball feeds")
+        }
+        
+        if tips.isEmpty {
+            tips.append("Great session! Try adding more variety to your shots")
+            tips.append("Challenge yourself with different target zones")
+        }
+        
+        return tips
     }
     
     func createShareImage() -> UIImage {
