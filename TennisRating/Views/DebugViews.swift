@@ -44,6 +44,11 @@ struct DebugOverlay: View {
             directionMetric(info.motionDirection)
             phaseMetric(info.swingPhase)
             
+            // Classification scores (if available)
+            if let scores = info.classificationScores {
+                classificationScoresSection(scores: scores)
+            }
+            
             // Confidence
             confidenceSection(info.confidence)
             
@@ -126,6 +131,21 @@ struct DebugOverlay: View {
                 .foregroundColor(phaseColor(phase))
                 .bold()
         }
+    }
+    
+    private func classificationScoresSection(scores: (forehand: Double, backhand: Double, serve: Double)) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("CLASSIFICATION")
+                .font(.caption2)
+                .foregroundColor(.yellow)
+            
+            HStack(spacing: 10) {
+                ScoreBar(label: "FH", score: scores.forehand, color: .blue)
+                ScoreBar(label: "BH", score: scores.backhand, color: .green)
+                ScoreBar(label: "S", score: scores.serve, color: .orange)
+            }
+        }
+        .padding(.vertical, 4)
     }
     
     private func confidenceSection(_ confidence: Float) -> some View {
@@ -239,6 +259,35 @@ struct ThresholdIndicator: View {
             Text("\(Int(value))/\(Int(threshold))")
                 .font(.caption2)
                 .foregroundColor(met ? .green : .red)
+        }
+    }
+}
+
+// MARK: - Score Bar Component
+struct ScoreBar: View {
+    let label: String
+    let score: Double
+    let color: Color
+    
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.white)
+            
+            ZStack(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(width: 25, height: 40)
+                
+                Rectangle()
+                    .fill(color)
+                    .frame(width: 25, height: 40 * CGFloat(score))
+            }
+            
+            Text("\(Int(score * 100))")
+                .font(.caption2)
+                .foregroundColor(score > 0.5 ? color : .gray)
         }
     }
 }

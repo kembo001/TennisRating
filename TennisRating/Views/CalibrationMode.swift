@@ -124,48 +124,83 @@ class SwingCalibrationData: ObservableObject {
         
         for pattern in patterns {
             var score = 0.0
+            var weights = 0.0
             
-            // Horizontal movement similarity (most important for FH/BH)
+            // Direction matching (MOST IMPORTANT)
+            // For forehand/backhand, horizontal direction is critical
+            let horizontalMatch: Bool
+            if pattern.horizontalChange < -100 && horizontal < -50 {
+                // Both are leftward (forehand-like)
+                horizontalMatch = true
+            } else if pattern.horizontalChange > 100 && horizontal > 50 {
+                // Both are rightward (backhand-like)
+                horizontalMatch = true
+            } else if abs(pattern.horizontalChange) < 100 && abs(horizontal) < 100 {
+                // Both are mostly vertical (could be serve)
+                horizontalMatch = true
+            } else {
+                horizontalMatch = false
+            }
+            
+            if horizontalMatch {
+                score += 2.0  // Heavy weight for correct direction
+                weights += 2.0
+            }
+            
+            // Horizontal movement similarity
             let hDiff = abs(pattern.horizontalChange - horizontal)
-            if hDiff < 50 {
-                score += 1.0
-            } else if hDiff < 100 {
-                score += 0.7
-            } else if hDiff < 200 {
-                score += 0.3
+            if hDiff < 100 {
+                score += 1.0 * (1.0 - hDiff/100.0)
+                weights += 1.0
+            } else if hDiff < 300 {
+                score += 0.5 * (1.0 - hDiff/300.0)
+                weights += 0.5
             }
             
             // Vertical movement similarity (important for serves)
             let vDiff = abs(pattern.verticalChange - vertical)
-            if vDiff < 50 {
-                score += 0.8
-            } else if vDiff < 100 {
-                score += 0.5
-            } else if vDiff < 200 {
-                score += 0.2
+            if abs(pattern.verticalChange) > 150 || abs(vertical) > 150 {
+                // This is likely a serve, vertical matters more
+                if vDiff < 100 {
+                    score += 1.5 * (1.0 - vDiff/100.0)
+                    weights += 1.5
+                }
+            } else {
+                // Ground stroke, vertical less important
+                if vDiff < 150 {
+                    score += 0.3 * (1.0 - vDiff/150.0)
+                    weights += 0.3
+                }
             }
             
-            // Speed similarity
+            // Speed similarity (moderate importance)
             let speedRatio = min(speed, pattern.maxSpeed) / max(speed, pattern.maxSpeed)
-            score += speedRatio * 0.6
+            score += speedRatio * 0.8
+            weights += 0.8
             
-            // Starting position similarity
-            let startDiff = abs(pattern.startX - startX)
-            if startDiff < 0.1 {
-                score += 0.4
-            } else if startDiff < 0.2 {
-                score += 0.2
+            // Starting position (helpful for disambiguation)
+            let startXDiff = abs(pattern.startX - startX)
+            if startXDiff < 0.15 {
+                score += 0.5 * (1.0 - startXDiff/0.15)
+                weights += 0.5
             }
             
             // Duration similarity
             let durationRatio = min(duration, pattern.duration) / max(duration, pattern.duration)
-            score += durationRatio * 0.3
+            if durationRatio > 0.7 {
+                score += 0.4 * durationRatio
+                weights += 0.4
+            }
             
             // Amplitude similarity
-            let ampRatio = min(amplitude, pattern.amplitude) / max(amplitude, pattern.amplitude)
-            score += ampRatio * 0.3
+            if amplitude > 50 && pattern.amplitude > 50 {
+                let ampRatio = min(amplitude, pattern.amplitude) / max(amplitude, pattern.amplitude)
+                score += 0.4 * ampRatio
+                weights += 0.4
+            }
             
-            bestScore = max(bestScore, score / 3.4)  // Normalize to 0-1
+            let normalizedScore = weights > 0 ? score / weights : 0
+            bestScore = max(bestScore, normalizedScore)
         }
         
         return bestScore

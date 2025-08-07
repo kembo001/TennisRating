@@ -62,6 +62,7 @@ class EnhancedSwingDetector {
         let swingPhase: SwingPhase
         let motionDirection: String
         let confidence: Float
+        let classificationScores: (forehand: Double, backhand: Double, serve: Double)?  // Add scores
     }
     
     // Adjustable thresholds (tune these based on testing)
@@ -109,13 +110,22 @@ class EnhancedSwingDetector {
         
         // Update debug info
         if debugMode {
+            // Calculate classification scores if we have calibration data
+            var scores: (forehand: Double, backhand: Double, serve: Double)? = nil
+            
+            if currentPhase == .forward || currentPhase == .followThrough {
+                // Only calculate scores during active swing phases
+                scores = calculateCurrentClassificationScores()
+            }
+            
             debugInfo = DebugInfo(
                 wristSpeed: wristSpeed,
                 elbowAngle: elbowAngle,
                 shoulderRotation: shoulderRotation,
                 swingPhase: currentPhase,
                 motionDirection: motionDirection,
-                confidence: avgConfidence
+                confidence: avgConfidence,
+                classificationScores: scores
             )
         }
         
@@ -284,62 +294,113 @@ class EnhancedSwingDetector {
         }
         
         let firstPoint = wristPath.first!
-        let midPoint = wristPath[wristPath.count / 2]
         let lastPoint = wristPath.last!
+        let firstQuarter = wristPath[wristPath.count / 4]
+        let midPoint = wristPath[wristPath.count / 2]
+        let thirdQuarter = wristPath[3 * wristPath.count / 4]
         
         // Calculate key metrics
         let horizontalChange = (lastPoint.x - firstPoint.x) * 1920
         let verticalChange = (firstPoint.y - lastPoint.y) * 1080
-        let midVerticalChange = (firstPoint.y - midPoint.y) * 1080
         
-        // Calculate path curvature (how much the path curves)
-        let directDistance = sqrt(pow(lastPoint.x - firstPoint.x, 2) + pow(lastPoint.y - firstPoint.y, 2))
-        let pathLength = calculatePathLength()
-        let curvature = pathLength / max(directDistance, 0.01)
+        // Calculate path characteristics
+        let startHeight = firstPoint.y
+        let endHeight = lastPoint.y
+        let maxHeight = wristPath.map { $0.y }.min() ?? 0  // min because y=0 is top
+        let minHeight = wristPath.map { $0.y }.max() ?? 1
         
-        // SERVE DETECTION - Most distinctive pattern
-        // Serves have strong vertical component and start high
-        if firstPoint.y < 0.4 &&  // Starts in upper half of frame
-           verticalChange > 200 &&  // Strong downward motion
-           abs(verticalChange) > abs(horizontalChange) * 1.5 &&  // More vertical than horizontal
-           curvature > 1.3 {  // Curved path (not straight line)
+        // Calculate average height of swing
+        let avgHeight = wristPath.reduce(0.0) { $0 + $1.y } / CGFloat(wristPath.count)
+        
+        // Debug output
+        print("Swing Analysis:")
+        print("  Horizontal: \(horizontalChange)")
+        print("  Vertical: \(verticalChange)")
+        print("  Start Height: \(startHeight)")
+        print("  Avg Height: \(avgHeight)")
+        print("  Start X: \(firstPoint.x)")
+        
+        // SERVE DETECTION - Look for high start and downward motion
+        if startHeight < 0.35 &&  // Starts in upper third
+           verticalChange > 150 &&  // Strong downward component
+           (maxHeight < 0.3) &&  // Reaches high point
+           abs(verticalChange) > abs(horizontalChange) * 0.8 {  // More vertical than horizontal
+            print("  Decision: SERVE (high start, downward motion)")
             return .serve
         }
         
-        // GROUND STROKES - Distinguish by direction and starting position
-        // For right-handed player
-        
-        // Calculate average Y position (height of swing)
-        let avgY = wristPath.reduce(0.0) { $0 + $1.y } / CGFloat(wristPath.count)
-        
-        // Ground strokes typically happen in middle third of frame
-        if avgY > 0.3 && avgY < 0.7 {
+        // GROUND STROKES - Must be in reasonable hitting zone
+        if avgHeight > 0.35 && avgHeight < 0.75 {  // Middle zone
             
-            // FOREHAND: Starts from player's right side, moves left
-            if firstPoint.x > 0.5 &&  // Starts on right side
-               horizontalChange < -200 &&  // Strong leftward motion
-               abs(horizontalChange) > abs(verticalChange) {  // More horizontal than vertical
+            // Check for consistent horizontal motion direction
+            let firstHalfHorizontal = (midPoint.x - firstPoint.x) * 1920
+            let secondHalfHorizontal = (lastPoint.x - midPoint.x) * 1920
+            
+            // FOREHAND: Consistent right-to-left motion
+            if horizontalChange < -150 &&  // Overall leftward
+               firstHalfHorizontal < -50 &&  // First half going left
+               secondHalfHorizontal < -50 &&  // Second half still going left
+               firstPoint.x > 0.4 {  // Starts from right side
+                print("  Decision: FOREHAND (consistent R->L)")
                 return .forehand
             }
             
-            // BACKHAND: Starts from player's left side, moves right
-            if firstPoint.x < 0.5 &&  // Starts on left side
-               horizontalChange > 200 &&  // Strong rightward motion
-               abs(horizontalChange) > abs(verticalChange) {  // More horizontal than vertical
+            // BACKHAND: Consistent left-to-right motion
+            if horizontalChange > 150 &&  // Overall rightward
+               firstHalfHorizontal > 50 &&  // First half going right
+               secondHalfHorizontal > 50 &&  // Second half still going right
+               firstPoint.x < 0.6 {  // Starts from left side
+                print("  Decision: BACKHAND (consistent L->R)")
                 return .backhand
             }
             
-            // Alternative detection based on motion alone
-            if abs(horizontalChange) > 150 {
+            // Fallback: Use simple horizontal direction
+            if abs(horizontalChange) > 100 {
                 if horizontalChange < 0 {
-                    return .forehand  // Any significant right-to-left
+                    print("  Decision: FOREHAND (fallback)")
+                    return .forehand
                 } else {
-                    return .backhand  // Any significant left-to-right
+                    print("  Decision: BACKHAND (fallback)")
+                    return .backhand
                 }
             }
         }
         
+        print("  Decision: UNKNOWN")
         return .unknown
+    }
+    
+    private func calculateCurrentClassificationScores() -> (forehand: Double, backhand: Double, serve: Double)? {
+        // This is a simplified scoring for debug display
+        guard wristPath.count >= 5 else { return nil }
+        
+        let firstPoint = wristPath.first!
+        let lastPoint = wristPath.last!
+        
+        let horizontalChange = (lastPoint.x - firstPoint.x) * 1920
+        let verticalChange = (firstPoint.y - lastPoint.y) * 1080
+        
+        // Simple scoring based on motion direction
+        var fhScore = 0.0
+        var bhScore = 0.0
+        var sScore = 0.0
+        
+        // Serve: vertical motion
+        if abs(verticalChange) > 100 {
+            sScore = min(abs(verticalChange) / 300.0, 1.0)
+        }
+        
+        // Forehand: right to left
+        if horizontalChange < -100 {
+            fhScore = min(abs(horizontalChange) / 300.0, 1.0)
+        }
+        
+        // Backhand: left to right
+        if horizontalChange > 100 {
+            bhScore = min(horizontalChange / 300.0, 1.0)
+        }
+        
+        return (fhScore, bhScore, sScore)
     }
     
     private func calculatePathLength() -> CGFloat {
