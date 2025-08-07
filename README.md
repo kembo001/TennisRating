@@ -1,4 +1,4 @@
-#Tennis Rating App
+# Tennis Rating App
 
 Welcome to **Tennis Rating**, an iOS‑first app that turns a single iPhone into a pocket coach. The app records two simple drills, extracts key performance metrics on‑device in real time, then gives players a clear 1‑5‑star rating they can share with friends.
 
