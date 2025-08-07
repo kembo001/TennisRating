@@ -108,7 +108,7 @@ The project is licensed under the MIT License. See [`LICENSE`](LICENSE) for deta
 
 ## Authors
 
-Built with love by Adrian Cheruiyot and the Tennis Rating core team.
+Built with love by Brandon Kemboi and the Tennis Rating core team.
 
 ## Acknowledgements
 
