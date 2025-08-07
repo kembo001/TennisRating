@@ -1,6 +1,7 @@
 import Vision
 import AVFoundation
 import CoreImage
+import SwiftUI
 
 // MARK: - Pose Point Tracking
 struct PosePoint {
@@ -31,179 +32,309 @@ enum SwingPhase {
     case completed
 }
 
-class SwingDetector {
+// MARK: - Swing Metrics
+struct SwingMetrics {
+    let maxSpeed: CGFloat
+    let amplitude: CGFloat
+    let duration: TimeInterval
+    let path: [CGPoint]
+}
+
+// MARK: - Enhanced Swing Detector with Debug Info
+class EnhancedSwingDetector {
     private var poseHistory: [PoseFrame] = []
     private var currentPhase: SwingPhase = .idle
     private var swingStartTime: Date?
-    private var peakBackswingPosition: CGPoint?
     
-    // Thresholds for swing detection
-    private let minSwingVelocity: CGFloat = 200.0 // pixels per second
-    private let minSwingDistance: CGFloat = 100.0 // pixels
-    private let maxSwingDuration: TimeInterval = 2.0
-    private let historyWindowSize = 30 // frames (~1 second at 30fps)
+    // Tracking for swing analysis
+    private var wristPath: [CGPoint] = []
+    private var maxWristSpeed: CGFloat = 0
+    private var swingAmplitude: CGFloat = 0
+    
+    // Debug mode
+    var debugMode = true
+    var debugInfo: DebugInfo?
+    
+    struct DebugInfo {
+        let wristSpeed: CGFloat
+        let elbowAngle: CGFloat
+        let shoulderRotation: CGFloat
+        let swingPhase: SwingPhase
+        let motionDirection: String
+        let confidence: Float
+    }
+    
+    // Adjustable thresholds (tune these based on testing)
+    struct Thresholds {
+        static let minSwingSpeed: CGFloat = 500.0  // Increased to avoid false positives
+        static let minBackswingDistance: CGFloat = 100.0
+        static let minForwardSpeed: CGFloat = 800.0  // Increased for real swings
+        static let maxIdleSpeed: CGFloat = 200.0  // Increased idle threshold
+        static let minConfidence: Float = 0.6
+        static let minSwingDuration: TimeInterval = 0.3  // Minimum swing time
+        static let maxSwingDuration: TimeInterval = 2.0  // Maximum swing time
+    }
     
     func addPoseFrame(_ frame: PoseFrame) {
         poseHistory.append(frame)
         
-        // Keep only recent history
-        if poseHistory.count > historyWindowSize {
+        // Keep last 60 frames (2 seconds at 30fps)
+        if poseHistory.count > 60 {
             poseHistory.removeFirst()
         }
         
-        // Analyze for swing
-        analyzeSwing()
+        // Track wrist path
+        if let wrist = frame.wrist, wrist.confidence > Thresholds.minConfidence {
+            wristPath.append(wrist.location)
+            if wristPath.count > 60 {
+                wristPath.removeFirst()
+            }
+        }
+        
+        analyzeSwingWithDebug()
     }
     
-    private func analyzeSwing() {
-        guard poseHistory.count >= 10 else { return }
+    private func analyzeSwingWithDebug() {
+        guard poseHistory.count >= 5 else { return }
         
+        let recentFrames = Array(poseHistory.suffix(10))
+        guard let currentFrame = recentFrames.last else { return }
+        
+        // Calculate metrics
+        let wristSpeed = calculateWristSpeed(frames: recentFrames)
+        let elbowAngle = calculateElbowAngle(frame: currentFrame)
+        let shoulderRotation = calculateShoulderRotation(frames: recentFrames)
+        let motionDirection = getMotionDirection(frames: recentFrames)
+        let avgConfidence = calculateAverageConfidence(frame: currentFrame)
+        
+        // Update debug info
+        if debugMode {
+            debugInfo = DebugInfo(
+                wristSpeed: wristSpeed,
+                elbowAngle: elbowAngle,
+                shoulderRotation: shoulderRotation,
+                swingPhase: currentPhase,
+                motionDirection: motionDirection,
+                confidence: avgConfidence
+            )
+        }
+        
+        // State machine with improved detection
         switch currentPhase {
         case .idle:
-            checkForBackswingStart()
-        case .backswing:
-            checkForForwardSwing()
-        case .forward:
-            checkForFollowThrough()
-        case .followThrough:
-            checkForCompletion()
-        case .completed:
-            resetDetection()
-        }
-    }
-    
-    private func checkForBackswingStart() {
-        guard let recentFrames = getValidRecentFrames(count: 5) else { return }
-        
-        // Check if wrist is moving backwards (increasing X for right-handed)
-        let wristVelocity = calculateWristVelocity(frames: recentFrames)
-        
-        if abs(wristVelocity.x) > minSwingVelocity / 3 {
-            currentPhase = .backswing
-            swingStartTime = Date()
+            // Detect backswing start - look for wrist moving away from rest position
+            if wristSpeed > Thresholds.minSwingSpeed &&
+               (motionDirection == "right" || motionDirection == "up") {
+                currentPhase = .backswing
+                swingStartTime = Date()
+                wristPath.removeAll()
+                maxWristSpeed = 0
+            }
             
-            if let lastFrame = recentFrames.last,
-               let wrist = lastFrame.wrist {
-                peakBackswingPosition = wrist.location
+        case .backswing:
+            // Track max speed and amplitude
+            maxWristSpeed = max(maxWristSpeed, wristSpeed)
+            
+            // Detect transition to forward swing (direction change + acceleration)
+            if motionDirection == "left" && wristSpeed > Thresholds.minForwardSpeed {
+                currentPhase = .forward
+                swingAmplitude = calculateSwingAmplitude()
             }
-        }
-    }
-    
-    private func checkForForwardSwing() {
-        guard let recentFrames = getValidRecentFrames(count: 5),
-              let startTime = swingStartTime else { return }
-        
-        // Timeout check
-        if Date().timeIntervalSince(startTime) > maxSwingDuration {
-            resetDetection()
-            return
-        }
-        
-        let wristVelocity = calculateWristVelocity(frames: recentFrames)
-        
-        // Check for direction change (forward swing)
-        if wristVelocity.x < -minSwingVelocity { // Moving left for right-handed forehand
-            currentPhase = .forward
-        }
-        
-        // Update peak position
-        if let currentWrist = recentFrames.last?.wrist {
-            if let peak = peakBackswingPosition {
-                if currentWrist.location.x > peak.x {
-                    peakBackswingPosition = currentWrist.location
-                }
+            
+            // Timeout
+            if let start = swingStartTime, Date().timeIntervalSince(start) > 3.0 {
+                resetDetection()
             }
+            
+        case .forward:
+            // Track through the forward swing
+            maxWristSpeed = max(maxWristSpeed, wristSpeed)
+            
+            // Detect follow-through when speed decreases
+            if wristSpeed < maxWristSpeed * 0.5 {
+                currentPhase = .followThrough
+            }
+            
+        case .followThrough:
+            // Complete the swing when motion nearly stops
+            if wristSpeed < Thresholds.maxIdleSpeed {
+                currentPhase = .completed
+            }
+            
+        case .completed:
+            // Swing is complete, will be handled by parent
+            break
         }
     }
     
-    private func checkForFollowThrough() {
-        guard let recentFrames = getValidRecentFrames(count: 5) else { return }
-        
-        let wristVelocity = calculateWristVelocity(frames: recentFrames)
-        
-        // Check if swing is slowing down
-        if abs(wristVelocity.x) < minSwingVelocity / 2 {
-            currentPhase = .followThrough
-        }
-    }
-    
-    private func checkForCompletion() {
-        guard let peak = peakBackswingPosition,
-              let currentFrame = poseHistory.last,
-              let wrist = currentFrame.wrist else { return }
-        
-        // Check if wrist has traveled sufficient distance
-        let swingDistance = abs(wrist.location.x - peak.x)
-        
-        if swingDistance > minSwingDistance {
-            currentPhase = .completed
-        } else {
-            // Not a valid swing, reset
-            resetDetection()
-        }
-    }
-    
-    private func resetDetection() {
-        currentPhase = .idle
-        swingStartTime = nil
-        peakBackswingPosition = nil
-    }
-    
-    private func getValidRecentFrames(count: Int) -> [PoseFrame]? {
-        let recentFrames = Array(poseHistory.suffix(count))
-        let validFrames = recentFrames.filter { $0.isValidFrame }
-        return validFrames.count >= count ? validFrames : nil
-    }
-    
-    private func calculateWristVelocity(frames: [PoseFrame]) -> CGPoint {
+    private func calculateWristSpeed(frames: [PoseFrame]) -> CGFloat {
         guard frames.count >= 2,
-              let firstWrist = frames.first?.wrist,
-              let lastWrist = frames.last?.wrist else {
-            return .zero
+              let firstWrist = frames[frames.count - 2].wrist,
+              let lastWrist = frames.last?.wrist,
+              firstWrist.confidence > Thresholds.minConfidence,
+              lastWrist.confidence > Thresholds.minConfidence else {
+            return 0
         }
+        
+        let dx = (lastWrist.location.x - firstWrist.location.x) * 1920 // Convert to pixels
+        let dy = (lastWrist.location.y - firstWrist.location.y) * 1080
+        let distance = sqrt(dx * dx + dy * dy)
         
         let timeDiff = lastWrist.timestamp.timeIntervalSince(firstWrist.timestamp)
-        guard timeDiff > 0 else { return .zero }
+        guard timeDiff > 0 else { return 0 }
+        
+        return distance / timeDiff
+    }
+    
+    private func calculateElbowAngle(frame: PoseFrame) -> CGFloat {
+        guard let wrist = frame.wrist,
+              let elbow = frame.elbow,
+              let shoulder = frame.shoulder,
+              wrist.confidence > Thresholds.minConfidence,
+              elbow.confidence > Thresholds.minConfidence,
+              shoulder.confidence > Thresholds.minConfidence else {
+            return 0
+        }
+        
+        // Calculate angle between shoulder-elbow-wrist
+        let v1 = CGVector(
+            dx: shoulder.location.x - elbow.location.x,
+            dy: shoulder.location.y - elbow.location.y
+        )
+        let v2 = CGVector(
+            dx: wrist.location.x - elbow.location.x,
+            dy: wrist.location.y - elbow.location.y
+        )
+        
+        let dot = v1.dx * v2.dx + v1.dy * v2.dy
+        let det = v1.dx * v2.dy - v1.dy * v2.dx
+        let angle = atan2(det, dot) * 180 / .pi
+        
+        return abs(angle)
+    }
+    
+    private func calculateShoulderRotation(frames: [PoseFrame]) -> CGFloat {
+        guard frames.count >= 2,
+              let firstShoulder = frames.first?.shoulder,
+              let lastShoulder = frames.last?.shoulder,
+              firstShoulder.confidence > Thresholds.minConfidence,
+              lastShoulder.confidence > Thresholds.minConfidence else {
+            return 0
+        }
+        
+        let rotation = abs(lastShoulder.location.x - firstShoulder.location.x) * 1920
+        return rotation
+    }
+    
+    private func getMotionDirection(frames: [PoseFrame]) -> String {
+        guard frames.count >= 2,
+              let firstWrist = frames[frames.count - 2].wrist,
+              let lastWrist = frames.last?.wrist else {
+            return "none"
+        }
         
         let dx = lastWrist.location.x - firstWrist.location.x
         let dy = lastWrist.location.y - firstWrist.location.y
         
-        return CGPoint(x: dx / timeDiff, y: dy / timeDiff)
+        if abs(dx) > abs(dy) {
+            return dx > 0 ? "right" : "left"
+        } else {
+            return dy > 0 ? "down" : "up"
+        }
     }
     
-    func detectSwingType(from frames: [PoseFrame]) -> SwingType {
-        guard frames.count >= 10 else { return .unknown }
+    private func calculateAverageConfidence(frame: PoseFrame) -> Float {
+        var totalConfidence: Float = 0
+        var count: Float = 0
         
-        // Analyze trajectory patterns
-        let validFrames = frames.filter { $0.isValidFrame }
-        guard validFrames.count >= 5 else { return .unknown }
+        if let wrist = frame.wrist {
+            totalConfidence += wrist.confidence
+            count += 1
+        }
+        if let elbow = frame.elbow {
+            totalConfidence += elbow.confidence
+            count += 1
+        }
+        if let shoulder = frame.shoulder {
+            totalConfidence += shoulder.confidence
+            count += 1
+        }
         
-        // Check vertical movement for serve
-        if let firstWrist = validFrames.first?.wrist,
-           let lastWrist = validFrames.last?.wrist {
+        return count > 0 ? totalConfidence / count : 0
+    }
+    
+    private func calculateSwingAmplitude() -> CGFloat {
+        guard wristPath.count >= 2 else { return 0 }
+        
+        let minX = wristPath.map { $0.x }.min() ?? 0
+        let maxX = wristPath.map { $0.x }.max() ?? 0
+        
+        return (maxX - minX) * 1920 // Convert to pixels
+    }
+    
+    func detectSwingType() -> SwingType {
+        // Use collected metrics to determine swing type
+        guard swingAmplitude > 100, maxWristSpeed > Thresholds.minForwardSpeed else {
+            return .unknown
+        }
+        
+        // Analyze wrist path shape for swing classification
+        guard wristPath.count >= 10 else {
+            return .unknown
+        }
+        
+        let firstPoint = wristPath.first!
+        let midPoint = wristPath[wristPath.count / 2]
+        let lastPoint = wristPath.last!
+        
+        // Calculate key metrics
+        let horizontalChange = (lastPoint.x - firstPoint.x) * 1920
+        let verticalChange = (firstPoint.y - lastPoint.y) * 1080
+        let midVerticalChange = (firstPoint.y - midPoint.y) * 1080
+        
+        // Calculate path curvature (how much the path curves)
+        let directDistance = sqrt(pow(lastPoint.x - firstPoint.x, 2) + pow(lastPoint.y - firstPoint.y, 2))
+        let pathLength = calculatePathLength()
+        let curvature = pathLength / max(directDistance, 0.01)
+        
+        // SERVE DETECTION - Most distinctive pattern
+        // Serves have strong vertical component and start high
+        if firstPoint.y < 0.4 &&  // Starts in upper half of frame
+           verticalChange > 200 &&  // Strong downward motion
+           abs(verticalChange) > abs(horizontalChange) * 1.5 &&  // More vertical than horizontal
+           curvature > 1.3 {  // Curved path (not straight line)
+            return .serve
+        }
+        
+        // GROUND STROKES - Distinguish by direction and starting position
+        // For right-handed player
+        
+        // Calculate average Y position (height of swing)
+        let avgY = wristPath.reduce(0.0) { $0 + $1.y } / CGFloat(wristPath.count)
+        
+        // Ground strokes typically happen in middle third of frame
+        if avgY > 0.3 && avgY < 0.7 {
             
-            let verticalMovement = firstWrist.location.y - lastWrist.location.y
-            let horizontalMovement = abs(lastWrist.location.x - firstWrist.location.x)
-            
-            // Serve: Strong vertical movement
-            if verticalMovement > 150 && verticalMovement > horizontalMovement {
-                return .serve
+            // FOREHAND: Starts from player's right side, moves left
+            if firstPoint.x > 0.5 &&  // Starts on right side
+               horizontalChange < -200 &&  // Strong leftward motion
+               abs(horizontalChange) > abs(verticalChange) {  // More horizontal than vertical
+                return .forehand
             }
             
-            // Forehand vs Backhand (for right-handed player)
-            // Analyze elbow-wrist relationship
-            if let firstElbow = validFrames.first?.elbow,
-               let lastElbow = validFrames.last?.elbow {
-                
-                // Forehand: Wrist crosses body from right to left
-                // Backhand: Wrist moves from left to right
-                let wristCrossing = lastWrist.location.x - firstWrist.location.x
-                let elbowMovement = lastElbow.location.x - firstElbow.location.x
-                
-                if wristCrossing < -100 { // Strong leftward movement
-                    return .forehand
-                } else if wristCrossing > 100 { // Strong rightward movement
-                    return .backhand
+            // BACKHAND: Starts from player's left side, moves right
+            if firstPoint.x < 0.5 &&  // Starts on left side
+               horizontalChange > 200 &&  // Strong rightward motion
+               abs(horizontalChange) > abs(verticalChange) {  // More horizontal than vertical
+                return .backhand
+            }
+            
+            // Alternative detection based on motion alone
+            if abs(horizontalChange) > 150 {
+                if horizontalChange < 0 {
+                    return .forehand  // Any significant right-to-left
+                } else {
+                    return .backhand  // Any significant left-to-right
                 }
             }
         }
@@ -211,20 +342,50 @@ class SwingDetector {
         return .unknown
     }
     
+    private func calculatePathLength() -> CGFloat {
+        guard wristPath.count > 1 else { return 0 }
+        
+        var length: CGFloat = 0
+        for i in 1..<wristPath.count {
+            let dx = wristPath[i].x - wristPath[i-1].x
+            let dy = wristPath[i].y - wristPath[i-1].y
+            length += sqrt(dx * dx + dy * dy)
+        }
+        return length
+    }
+    
+    private func resetDetection() {
+        currentPhase = .idle
+        swingStartTime = nil
+        wristPath.removeAll()
+        maxWristSpeed = 0
+        swingAmplitude = 0
+    }
+    
+    func reset() {  // Public method with different name
+        resetDetection()
+    }
+    
     var isSwingComplete: Bool {
         return currentPhase == .completed
     }
     
-    func getSwingFrames() -> [PoseFrame] {
-        return poseHistory
+    func getSwingMetrics() -> SwingMetrics {
+        return SwingMetrics(
+            maxSpeed: maxWristSpeed,
+            amplitude: swingAmplitude,
+            duration: swingStartTime.map { Date().timeIntervalSince($0) } ?? 0,
+            path: wristPath
+        )
     }
 }
 
-// MARK: - Vision Service
+// MARK: - Vision Service with Enhanced Detection
 class VisionService: NSObject {
     private let sequenceHandler = VNSequenceRequestHandler()
     private var poseRequest: VNDetectHumanBodyPoseRequest?
-    private let swingDetector = SwingDetector()
+    let swingDetector = EnhancedSwingDetector()
+    var calibrationData: SwingCalibrationData?  // Add calibration data
     
     // Callbacks
     var onSwingDetected: ((SwingType, TimeInterval) -> Void)?
@@ -245,7 +406,7 @@ class VisionService: NSObject {
             
             guard let observations = request.results as? [VNHumanBodyPoseObservation],
                   let observation = observations.first else {
-                self?.debugCallback?("No person detected")
+                self?.debugCallback?("No person detected - stand in frame")
                 return
             }
             
@@ -273,10 +434,28 @@ class VisionService: NSObject {
         // Also check left side for backhand
         let leftWrist = try? observation.recognizedPoint(.leftWrist)
         let leftElbow = try? observation.recognizedPoint(.leftElbow)
+        let leftShoulder = try? observation.recognizedPoint(.leftShoulder)
         
-        // Determine which wrist is active (higher confidence or more movement)
-        let activeWrist = (rightWrist?.confidence ?? 0) > (leftWrist?.confidence ?? 0) ? rightWrist : leftWrist
-        let activeElbow = (rightWrist?.confidence ?? 0) > (leftWrist?.confidence ?? 0) ? rightElbow : leftElbow
+        // Improved wrist selection based on movement and confidence
+        var activeWrist: VNRecognizedPoint?
+        var activeElbow: VNRecognizedPoint?
+        var activeShoulder: VNRecognizedPoint?
+        
+        // Calculate which wrist has more movement (use right as default for right-handed players)
+        let rightConfidence = rightWrist?.confidence ?? 0
+        let leftConfidence = leftWrist?.confidence ?? 0
+        
+        // Prefer right hand for most shots (assuming right-handed player)
+        // Only use left if right confidence is very low or for specific backhand detection
+        if rightConfidence > 0.3 {
+            activeWrist = rightWrist
+            activeElbow = rightElbow
+            activeShoulder = rightShoulder
+        } else if leftConfidence > 0.3 {
+            activeWrist = leftWrist
+            activeElbow = leftElbow
+            activeShoulder = leftShoulder
+        }
         
         // Create pose frame
         let timestamp = Date()
@@ -284,7 +463,7 @@ class VisionService: NSObject {
             timestamp: timestamp,
             wrist: activeWrist.map { PosePoint(location: $0.location, confidence: $0.confidence, timestamp: timestamp) },
             elbow: activeElbow.map { PosePoint(location: $0.location, confidence: $0.confidence, timestamp: timestamp) },
-            shoulder: rightShoulder.map { PosePoint(location: $0.location, confidence: $0.confidence, timestamp: timestamp) },
+            shoulder: activeShoulder.map { PosePoint(location: $0.location, confidence: $0.confidence, timestamp: timestamp) },
             hip: rightHip.map { PosePoint(location: $0.location, confidence: $0.confidence, timestamp: timestamp) }
         )
         
@@ -296,26 +475,43 @@ class VisionService: NSObject {
         
         // Check for completed swing
         if swingDetector.isSwingComplete {
-            let swingFrames = swingDetector.getSwingFrames()
-            let swingType = swingDetector.detectSwingType(from: swingFrames)
-            let duration = calculateSwingDuration(frames: swingFrames)
+            let metrics = swingDetector.getSwingMetrics()
             
-            debugCallback?("\(swingType.rawValue) detected! Duration: \(String(format: "%.2f", duration))s")
-            onSwingDetected?(swingType, duration)
+            // Only register if it's a valid swing duration
+            if metrics.duration >= EnhancedSwingDetector.Thresholds.minSwingDuration &&
+               metrics.duration <= EnhancedSwingDetector.Thresholds.maxSwingDuration &&
+               metrics.maxSpeed > EnhancedSwingDetector.Thresholds.minForwardSpeed {
+                
+                // Determine swing type - use calibration if available
+                let swingType: SwingType
+                if let calibration = calibrationData,
+                   calibration.hasCalibration(),
+                   let firstPoint = metrics.path.first {
+                    // Use calibrated classification
+                    swingType = calibration.classifySwing(metrics: metrics, startX: firstPoint.x)
+                } else {
+                    // Use default detection
+                    swingType = swingDetector.detectSwingType()
+                }
+                
+                debugCallback?("\(swingType.rawValue) detected! Speed: \(Int(metrics.maxSpeed)) px/s")
+                onSwingDetected?(swingType, metrics.duration)
+            }
             
-            // Reset for next swing
-            swingDetector.addPoseFrame(poseFrame) // Start fresh with current frame
-        }
-        
-        // Debug info
-        if let wrist = activeWrist, wrist.confidence > 0.5 {
-            debugCallback?("Tracking wrist (confidence: \(String(format: "%.2f", wrist.confidence)))")
+            // Reset detector for next swing
+            swingDetector.reset()  // Always reset after checking
         }
     }
     
-    private func calculateSwingDuration(frames: [PoseFrame]) -> TimeInterval {
-        guard let first = frames.first,
-              let last = frames.last else { return 0 }
-        return last.timestamp.timeIntervalSince(first.timestamp)
+    func enableDebugMode(_ enabled: Bool) {
+        swingDetector.debugMode = enabled
+    }
+    
+    func getDebugInfo() -> EnhancedSwingDetector.DebugInfo? {
+        return swingDetector.debugInfo
+    }
+    
+    func getSwingMetrics() -> SwingMetrics? {
+        return swingDetector.getSwingMetrics()
     }
 }

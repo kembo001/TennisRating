@@ -18,6 +18,8 @@ class CameraViewModel: NSObject, ObservableObject {
     @Published var cameraError: String?
     @Published var debugInfo = ""
     @Published var currentPoseFrame: PoseFrame?
+    @Published var debugMetrics: EnhancedSwingDetector.DebugInfo?
+    @Published var wristPath: [CGPoint] = []
     
     // Swing type tracking
     @Published var forehandCount = 0
@@ -29,7 +31,10 @@ class CameraViewModel: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "sessionQueue")
     
     // Vision service for pose detection
-    private let visionService = VisionService()
+    let visionService = VisionService()  // Made public for calibration access
+    
+    // Calibration data
+    var calibrationData: SwingCalibrationData?
     
     // Timing tracking
     private var sessionStartTime: Date?
@@ -38,12 +43,21 @@ class CameraViewModel: NSObject, ObservableObject {
     
     // Swing detection cooldown to prevent double-counting
     private var lastSwingDetectionTime: Date?
-    private let swingCooldownInterval: TimeInterval = 1.0 // 1 second between swings
+    private let swingCooldownInterval: TimeInterval = 1.5 // Increased to 1.5 seconds between swings
     
     override init() {
         super.init()
         setupSession()
         setupVisionCallbacks()
+    }
+    
+    func enableDebugMode(_ enabled: Bool) {
+        visionService.enableDebugMode(enabled)
+    }
+    
+    func setCalibrationData(_ data: SwingCalibrationData) {
+        calibrationData = data
+        visionService.calibrationData = data
     }
     
     private func setupVisionCallbacks() {
@@ -56,6 +70,12 @@ class CameraViewModel: NSObject, ObservableObject {
         visionService.onPoseDetected = { [weak self] poseFrame in
             DispatchQueue.main.async {
                 self?.currentPoseFrame = poseFrame
+                // Update debug metrics
+                self?.debugMetrics = self?.visionService.getDebugInfo()
+                // Update wrist path
+                if let metrics = self?.visionService.getSwingMetrics() {
+                    self?.wristPath = metrics.path
+                }
             }
         }
         

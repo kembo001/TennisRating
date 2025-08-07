@@ -6,10 +6,6 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		9CDB5C982E426DB300CF9180 /* README.md  in Resources */ = {isa = PBXBuildFile; fileRef = 9CDB5C972E426DB100CF9180 /* README.md  */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXContainerItemProxy section */
 		9CDB5C5D2E426BA400CF9180 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -31,7 +27,6 @@
 		9CDB5C4F2E426BA300CF9180 /* TennisRating.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TennisRating.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9CDB5C5C2E426BA400CF9180 /* TennisRatingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TennisRatingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9CDB5C662E426BA400CF9180 /* TennisRatingUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TennisRatingUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		9CDB5C972E426DB100CF9180 /* README.md  */ = {isa = PBXFileReference; lastKnownFileType = text; path = "README.md "; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -70,7 +65,6 @@
 		9CDB5C462E426BA300CF9180 = {
 			isa = PBXGroup;
 			children = (
-				9CDB5C972E426DB100CF9180 /* README.md  */,
 				9CDB5C512E426BA300CF9180 /* TennisRating */,
 				9CDB5C502E426BA300CF9180 /* Products */,
 			);
@@ -200,7 +194,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				9CDB5C982E426DB300CF9180 /* README.md  in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
