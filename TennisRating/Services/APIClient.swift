@@ -18,7 +18,7 @@ struct APIConfig {
 }
 
 // MARK: - API Error Types
-enum APIError: Error, LocalizedError {
+enum APIError: Error, LocalizedError, Equatable {
     case invalidURL
     case noData
     case decodingError(Error)
@@ -28,6 +28,26 @@ enum APIError: Error, LocalizedError {
     case noInternetConnection
     case timeout
     case unknown
+    
+    static func == (lhs: APIError, rhs: APIError) -> Bool {
+        switch (lhs, rhs) {
+        case (.invalidURL, .invalidURL),
+             (.noData, .noData),
+             (.unauthorized, .unauthorized),
+             (.noInternetConnection, .noInternetConnection),
+             (.timeout, .timeout),
+             (.unknown, .unknown):
+            return true
+        case (.decodingError(let lhsError), .decodingError(let rhsError)):
+            return lhsError.localizedDescription == rhsError.localizedDescription
+        case (.networkError(let lhsError), .networkError(let rhsError)):
+            return lhsError.localizedDescription == rhsError.localizedDescription
+        case (.serverError(let lhsCode, let lhsMessage), .serverError(let rhsCode, let rhsMessage)):
+            return lhsCode == rhsCode && lhsMessage == rhsMessage
+        default:
+            return false
+        }
+    }
     
     var errorDescription: String? {
         switch self {

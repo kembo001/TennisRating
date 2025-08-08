@@ -1,6 +1,6 @@
 import Foundation
 
-struct SessionData: Identifiable {
+struct SessionData: Identifiable, Codable {
     let id = UUID()
     let totalShots: Int
     let successfulShots: Int
@@ -65,5 +65,69 @@ struct SessionData: Identifiable {
         } else {
             return "Mixed"
         }
+    }
+    
+    // MARK: - Codable Implementation
+    enum CodingKeys: String, CodingKey {
+        case id, totalShots, successfulShots, timestamp, sessionDuration, shotTimings
+        case forehandCount, backhandCount, serveCount
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(totalShots, forKey: .totalShots)
+        try container.encode(successfulShots, forKey: .successfulShots)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(sessionDuration, forKey: .sessionDuration)
+        try container.encode(shotTimings, forKey: .shotTimings)
+        try container.encode(forehandCount, forKey: .forehandCount)
+        try container.encode(backhandCount, forKey: .backhandCount)
+        try container.encode(serveCount, forKey: .serveCount)
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(UUID.self, forKey: .id)
+        let totalShots = try container.decode(Int.self, forKey: .totalShots)
+        let successfulShots = try container.decode(Int.self, forKey: .successfulShots)
+        let timestamp = try container.decode(Date.self, forKey: .timestamp)
+        let sessionDuration = try container.decode(TimeInterval.self, forKey: .sessionDuration)
+        let shotTimings = try container.decode([TimeInterval].self, forKey: .shotTimings)
+        let forehandCount = try container.decode(Int.self, forKey: .forehandCount)
+        let backhandCount = try container.decode(Int.self, forKey: .backhandCount)
+        let serveCount = try container.decode(Int.self, forKey: .serveCount)
+        
+        self.init(
+            totalShots: totalShots,
+            successfulShots: successfulShots,
+            timestamp: timestamp,
+            sessionDuration: sessionDuration,
+            shotTimings: shotTimings,
+            forehandCount: forehandCount,
+            backhandCount: backhandCount,
+            serveCount: serveCount
+        )
+    }
+    
+    // MARK: - Regular Initializer (for your existing code)
+    init(
+        totalShots: Int,
+        successfulShots: Int,
+        timestamp: Date,
+        sessionDuration: TimeInterval,
+        shotTimings: [TimeInterval],
+        forehandCount: Int,
+        backhandCount: Int,
+        serveCount: Int
+    ) {
+        self.totalShots = totalShots
+        self.successfulShots = successfulShots
+        self.timestamp = timestamp
+        self.sessionDuration = sessionDuration
+        self.shotTimings = shotTimings
+        self.forehandCount = forehandCount
+        self.backhandCount = backhandCount
+        self.serveCount = serveCount
     }
 }

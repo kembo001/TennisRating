@@ -5,21 +5,104 @@ struct ContentView: View {
     @State private var showCalibration = false
     @State private var sessionData: SessionData?
     @StateObject private var calibrationData = SwingCalibrationData()
+    @StateObject private var authManager = AuthManager.shared
+    @State private var selectedTab = 0
     
     var body: some View {
+        Group {
+            // Handle authentication state
+            switch authManager.authState {
+            case .loading:
+                LoadingView()
+                
+            case .unauthenticated:
+                AuthenticationView()
+                
+            case .authenticated(let user):
+                authenticatedContent(user: user)
+            }
+        }
+        .sheet(item: $sessionData) { data in
+            ResultsView(sessionData: data)
+        }
+    }
+    
+    @ViewBuilder
+    private func authenticatedContent(user: User) -> some View {
+        TabView(selection: $selectedTab) {
+            // Practice Tab
+            practiceView
+                .tabItem {
+                    Image(systemName: "figure.tennis")
+                    Text("Practice")
+                }
+                .tag(0)
+            
+            // History Tab (placeholder for Priority #4)
+            sessionHistoryView
+                .tabItem {
+                    Image(systemName: "list.bullet")
+                    Text("History")
+                }
+                .tag(1)
+            
+            // Stats Tab (placeholder for Priority #5)
+            statsView
+                .tabItem {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                    Text("Stats")
+                }
+                .tag(2)
+            
+            // Profile Tab
+            profileView
+                .tabItem {
+                    Image(systemName: "person.circle")
+                    Text("Profile")
+                }
+                .tag(3)
+        }
+    }
+    
+    // MARK: - Practice View (Your existing main content)
+    private var practiceView: some View {
         NavigationView {
             VStack(spacing: 20) {
-                // Header
+                // Header with user greeting
                 VStack(spacing: 10) {
-                    Text("Tennis Shot Tracker")
-                        .font(.largeTitle)
-                        .bold()
+                    if let user = authManager.currentUser {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text("Hello, \(user.name.components(separatedBy: " ").first ?? "Player")!")
+                                    .font(.title2)
+                                    .bold()
+                                
+                                Text("Ready for practice?")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            // Demo mode indicator
+                            if authManager.useMockData {
+                                VStack {
+                                    Image(systemName: "wrench.and.screwdriver")
+                                        .foregroundColor(.orange)
+                                    Text("Demo")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
                     
                     Text("AI-Powered Swing Detection")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
-                .padding(.top, 40)
+                .padding(.top, 20)
                 
                 Spacer()
                 
@@ -134,6 +217,8 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 20)
             }
+            .navigationTitle("Tennis Practice")
+            .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showCamera) {
                 CameraViewWithCalibration(
                     sessionData: $sessionData,
@@ -146,13 +231,73 @@ struct ContentView: View {
                     sessionData: $sessionData
                 )
             }
-            .sheet(item: $sessionData) { data in
-                ResultsView(sessionData: data)
+        }
+    }
+    
+    // MARK: - Placeholder Views for Future Implementation
+    
+    private var sessionHistoryView: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Image(systemName: "list.bullet.clipboard")
+                    .font(.system(size: 60))
+                    .foregroundColor(.gray)
+                
+                Text("Session History")
+                    .font(.title2)
+                    .bold()
+                
+                Text("Coming Soon!")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Text("View your past practice sessions and track your progress over time.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                Spacer()
             }
+            .navigationTitle("History")
+        }
+    }
+    
+    private var statsView: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.gray)
+                
+                Text("Statistics")
+                    .font(.title2)
+                    .bold()
+                
+                Text("Coming Soon!")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                Text("Analyze your performance with detailed charts and insights.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                Spacer()
+            }
+            .navigationTitle("Stats")
+        }
+    }
+    
+    private var profileView: some View {
+        NavigationView {
+            UserProfileView()
         }
     }
 }
 
+// Keep your existing TipRow and CameraViewWithCalibration components
 struct TipRow: View {
     let icon: String
     let text: String

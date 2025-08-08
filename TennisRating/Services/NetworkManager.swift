@@ -56,7 +56,7 @@ class NetworkManager: ObservableObject {
     
     func testConnection() async -> Bool {
         let result = await performRequest {
-            try await apiClient.healthCheck()
+          try await self.apiClient.healthCheck()
         }
         
         switch result {
@@ -74,7 +74,7 @@ class NetworkManager: ObservableObject {
     
     func register(email: String, password: String, name: String) async -> AuthResponse? {
         let result = await performRequest {
-            try await apiClient.register(email: email, password: password, name: name)
+          try await self.apiClient.register(email: email, password: password, name: name)
         }
         
         switch result {
@@ -92,7 +92,7 @@ class NetworkManager: ObservableObject {
     
     func login(email: String, password: String) async -> AuthResponse? {
         let result = await performRequest {
-            try await apiClient.login(email: email, password: password)
+          try await self.apiClient.login(email: email, password: password)
         }
         
         switch result {
@@ -110,7 +110,7 @@ class NetworkManager: ObservableObject {
     
     func logout() async -> Bool {
         let result = await performRequest {
-            try await apiClient.logout()
+          try await self.apiClient.logout()
         }
         
         switch result {
@@ -130,7 +130,7 @@ class NetworkManager: ObservableObject {
     
     func uploadSession(_ sessionData: SessionData) async -> String? {
         let result = await performRequest {
-            try await apiClient.uploadSession(sessionData)
+          try await self.apiClient.uploadSession(sessionData)
         }
         
         switch result {
@@ -145,7 +145,7 @@ class NetworkManager: ObservableObject {
     
     func getUserSessions(userId: String) async -> [SessionData] {
         let result = await performRequest {
-            try await apiClient.getUserSessions(userId: userId)
+          try await self.apiClient.getUserSessions(userId: userId)
         }
         
         switch result {
@@ -159,7 +159,7 @@ class NetworkManager: ObservableObject {
     
     func getSession(sessionId: String) async -> SessionData? {
         let result = await performRequest {
-            try await apiClient.getSession(sessionId: sessionId)
+          try await self.apiClient.getSession(sessionId: sessionId)
         }
         
         switch result {
@@ -175,7 +175,7 @@ class NetworkManager: ObservableObject {
     
     func getUserStats(userId: String) async -> UserStats? {
         let result = await performRequest {
-            try await apiClient.getUserStats(userId: userId)
+          try await self.apiClient.getUserStats(userId: userId)
         }
         
         switch result {
@@ -189,7 +189,7 @@ class NetworkManager: ObservableObject {
     
     func getUserProgress(userId: String, period: String = "month") async -> ProgressData? {
         let result = await performRequest {
-            try await apiClient.getUserProgress(userId: userId, period: period)
+          try await self.apiClient.getUserProgress(userId: userId, period: period)
         }
         
         switch result {
@@ -218,28 +218,32 @@ struct NetworkErrorHandler: ViewModifier {
     @State private var showingError = false
     
     func body(content: Content) -> some View {
+      if #available(iOS 17.0, *) {
         content
-            .alert("Network Error", isPresented: $showingError) {
-                Button("OK") {
-                    showingError = false
-                }
-                
-                if networkManager.lastError != nil {
-                    Button("Retry") {
-                        networkManager.retryLastFailedRequest()
-                        showingError = false
-                    }
-                }
-            } message: {
-                if let error = networkManager.lastError {
-                    Text(error.localizedDescription)
-                }
+          .alert("Network Error", isPresented: $showingError) {
+            Button("OK") {
+              showingError = false
             }
-            .onChange(of: networkManager.lastError) { error in
-                if error != nil {
-                    showingError = true
-                }
+            
+            if networkManager.lastError != nil {
+              Button("Retry") {
+                networkManager.retryLastFailedRequest()
+                showingError = false
+              }
             }
+          } message: {
+            if let error = networkManager.lastError {
+              Text(error.localizedDescription)
+            }
+          }
+          .onChange(of: networkManager.lastError) { _, error in
+            if error != nil {
+              showingError = true
+            }
+          }
+      } else {
+        // Fallback on earlier versions
+      }
     }
 }
 
