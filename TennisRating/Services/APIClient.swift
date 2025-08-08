@@ -5,8 +5,8 @@ import Network
 struct APIConfig {
     static let baseURL: String = {
         #if DEBUG
-        // Development - Update this with Reid's server IP
-        return "http://YOUR_DIGITAL_OCEAN_IP:3000"
+        // Development - Reid's server IP
+        return "http://198.199.75.53:3000"
         #else
         // Production
         return "https://api.tennisrating.com"
