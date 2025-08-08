@@ -26,6 +26,12 @@ class CameraViewModel: NSObject, ObservableObject {
     @Published var backhandCount = 0
     @Published var serveCount = 0
     
+    // NEW: Machine Learning Data Collection
+    @Published var collectedSwings: [LabeledSwingData] = []
+    private var currentPoseSequence: [PoseFrameData] = []
+    @Published var isCapturingSequence = false  // Changed from private to @Published
+    private var sequenceStartTime: Date?
+    
     var captureSession: AVCaptureSession?
     private var videoOutput: AVCaptureVideoDataOutput?
     private let sessionQueue = DispatchQueue(label: "sessionQueue")
@@ -49,6 +55,7 @@ class CameraViewModel: NSObject, ObservableObject {
         super.init()
         setupSession()
         setupVisionCallbacks()
+        loadCollectedSwings()
     }
     
     func enableDebugMode(_ enabled: Bool) {
@@ -60,32 +67,200 @@ class CameraViewModel: NSObject, ObservableObject {
         visionService.calibrationData = data
     }
     
-    private func setupVisionCallbacks() {
-        // Handle swing detection
-        visionService.onSwingDetected = { [weak self] swingType, duration in
-            self?.handleSwingDetection(type: swingType, duration: duration)
+    // MARK: - Machine Learning Data Collection Methods
+    
+    func startCaptureSequence() {
+        currentPoseSequence.removeAll()
+        isCapturingSequence = true
+        sequenceStartTime = Date()
+        
+        // Give a visual cue
+        DispatchQueue.main.async {
+            self.debugInfo = "🔴 RECORDING SWING..."
         }
         
-        // Handle pose updates for visualization
-        visionService.onPoseDetected = { [weak self] poseFrame in
+        // Optional: Add haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+    }
+    
+    func stopAndSaveCaptureSequence(label: SwingType) {
+        guard isCapturingSequence else { return }
+        
+        isCapturingSequence = false
+        
+        // Only save if we have a reasonable amount of data
+        guard currentPoseSequence.count >= 10 else {
             DispatchQueue.main.async {
-                self?.currentPoseFrame = poseFrame
-                // Update debug metrics
-                self?.debugMetrics = self?.visionService.getDebugInfo()
-                // Update wrist path
-                if let metrics = self?.visionService.getSwingMetrics() {
-                    self?.wristPath = metrics.path
+                self.debugInfo = "❌ Not enough pose data captured"
+            }
+            return
+        }
+        
+        let newLabeledSwing = LabeledSwingData(
+            label: label.rawValue,
+            poseFrames: currentPoseSequence,
+            sessionId: UUID(),
+            timestamp: Date()
+        )
+        
+        collectedSwings.append(newLabeledSwing)
+        saveCollectedSwings()
+        
+        // Give a visual cue
+        DispatchQueue.main.async {
+            self.debugInfo = "✅ \(label.rawValue) captured! (\(self.collectedSwings.count) total)"
+        }
+        
+        // Success haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+        
+        // Reset for next capture
+        currentPoseSequence.removeAll()
+        sequenceStartTime = nil
+    }
+    
+    func cancelCaptureSequence() {
+        isCapturingSequence = false
+        currentPoseSequence.removeAll()
+        sequenceStartTime = nil
+        
+        DispatchQueue.main.async {
+            self.debugInfo = "❌ Capture cancelled"
+        }
+    }
+    
+    func clearAllCollectedSwings() {
+        collectedSwings.removeAll()
+        saveCollectedSwings()
+        
+        DispatchQueue.main.async {
+            self.debugInfo = "🗑️ All collected swings cleared"
+        }
+    }
+    
+    func getCollectedSwingsSummary() -> String {
+        let forehandCount = collectedSwings.filter { $0.label == "Forehand" }.count
+        let backhandCount = collectedSwings.filter { $0.label == "Backhand" }.count
+        let serveCount = collectedSwings.filter { $0.label == "Serve" }.count
+        
+        return "ML Data - FH: \(forehandCount), BH: \(backhandCount), S: \(serveCount)"
+    }
+    
+    func exportCollectedSwings() -> Data? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .prettyPrinted
+        
+        return try? encoder.encode(collectedSwings)
+    }
+    
+    // MARK: - Data Persistence
+    
+    private func saveCollectedSwings() {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
+        do {
+            let data = try encoder.encode(collectedSwings)
+            UserDefaults.standard.set(data, forKey: "collectedSwings")
+        } catch {
+            print("Failed to save collected swings: \(error)")
+        }
+    }
+    
+    private func loadCollectedSwings() {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        if let data = UserDefaults.standard.data(forKey: "collectedSwings"),
+           let loadedSwings = try? decoder.decode([LabeledSwingData].self, from: data) {
+            collectedSwings = loadedSwings
+        }
+    }
+    
+    // MARK: - Vision Callbacks Setup
+    
+    private func setupVisionCallbacks() {
+        // Handle pose updates for visualization AND data collection
+        visionService.onPoseDetected = { [weak self] poseFrame in
+            guard let self = self else { return }
+            
+            // Store pose data if we are in the middle of capturing a swing
+            if self.isCapturingSequence {
+                let frameData = PoseFrameData(
+                    wrist: poseFrame.wrist?.location,
+                    elbow: poseFrame.elbow?.location,
+                    shoulder: poseFrame.shoulder?.location,
+                    hip: poseFrame.hip?.location,
+                    timestamp: poseFrame.timestamp.timeIntervalSince(self.sequenceStartTime ?? Date()),
+                    confidence: self.calculateFrameConfidence(poseFrame)
+                )
+                self.currentPoseSequence.append(frameData)
+                
+                // Limit sequence length to prevent memory issues
+                if self.currentPoseSequence.count > 120 { // ~4 seconds at 30fps
+                    self.currentPoseSequence.removeFirst()
                 }
+            }
+            
+            DispatchQueue.main.async {
+                self.currentPoseFrame = poseFrame
+                // Update debug metrics
+                self.debugMetrics = self.visionService.getDebugInfo()
+                // Update wrist path
+                if let metrics = self.visionService.getSwingMetrics() {
+                    self.wristPath = metrics.path
+                }
+            }
+        }
+        
+        // Handle swing detection - can be used for automatic capture or manual triggering
+        visionService.onSwingDetected = { [weak self] swingType, duration in
+            // If we're in manual capture mode (isCapturingSequence), don't auto-handle
+            // This allows for manual control in calibration mode
+            if self?.isCapturingSequence == false {
+                self?.handleSwingDetection(type: swingType, duration: duration)
             }
         }
         
         // Handle debug messages
         visionService.debugCallback = { [weak self] message in
-            DispatchQueue.main.async {
-                self?.debugInfo = message
+            // Only update debug info if we're not currently showing capture status
+            if self?.isCapturingSequence == false {
+                DispatchQueue.main.async {
+                    self?.debugInfo = message
+                }
             }
         }
     }
+    
+    private func calculateFrameConfidence(_ poseFrame: PoseFrame) -> Float {
+        var totalConfidence: Float = 0
+        var count: Float = 0
+        
+        if let wrist = poseFrame.wrist {
+            totalConfidence += wrist.confidence
+            count += 1
+        }
+        if let elbow = poseFrame.elbow {
+            totalConfidence += elbow.confidence
+            count += 1
+        }
+        if let shoulder = poseFrame.shoulder {
+            totalConfidence += shoulder.confidence
+            count += 1
+        }
+        if let hip = poseFrame.hip {
+            totalConfidence += hip.confidence
+            count += 1
+        }
+        
+        return count > 0 ? totalConfidence / count : 0
+    }
+    
+    // MARK: - Original Swing Detection Logic
     
     private func handleSwingDetection(type: SwingType, duration: TimeInterval) {
         // Check cooldown to prevent double-counting
@@ -172,6 +347,8 @@ class CameraViewModel: NSObject, ObservableObject {
         
         return (isSuccess, feedback)
     }
+    
+    // MARK: - Camera Session Management
     
     func checkPermissions() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {

@@ -2,6 +2,24 @@ import SwiftUI
 import Foundation
 import AVFoundation  // Add this import for AudioServicesPlaySystemSound
 
+// MARK: - Machine Learning Data Structures
+struct LabeledSwingData: Codable {
+    let label: String // "Forehand", "Backhand", "Serve"
+    let poseFrames: [PoseFrameData] // A sequence of pose data
+    let sessionId: UUID
+    let timestamp: Date
+}
+
+struct PoseFrameData: Codable {
+    // We capture the key joint locations for the swing
+    let wrist: CGPoint?
+    let elbow: CGPoint?
+    let shoulder: CGPoint?
+    let hip: CGPoint?
+    let timestamp: TimeInterval
+    let confidence: Float // Overall confidence for this frame
+}
+
 // MARK: - Calibration Data Storage
 class SwingCalibrationData: ObservableObject {
     @Published var forehandPatterns: [SwingPattern] = []
@@ -9,6 +27,11 @@ class SwingCalibrationData: ObservableObject {
     @Published var servePatterns: [SwingPattern] = []
     @Published var isCalibrating = false
     @Published var calibratingType: SwingType = .forehand
+    
+    // NEW: Machine Learning Training Data
+    @Published var labeledTrainingData: [LabeledSwingData] = []
+    private var currentSwingFrames: [PoseFrameData] = []
+    private var swingStartTime: Date?
     
     struct SwingPattern: Codable {
         let horizontalChange: CGFloat
@@ -22,7 +45,133 @@ class SwingCalibrationData: ObservableObject {
     
     init() {
         loadCalibration()
+        loadTrainingData()
     }
+    
+    // MARK: - Machine Learning Methods
+    
+    func startRecordingSwing() {
+        currentSwingFrames.removeAll()
+        swingStartTime = Date()
+    }
+    
+    func addPoseFrame(_ poseFrame: PoseFrame) {
+        guard isCalibrating else { return }
+        
+        let frameData = PoseFrameData(
+            wrist: poseFrame.wrist?.location,
+            elbow: poseFrame.elbow?.location,
+            shoulder: poseFrame.shoulder?.location,
+            hip: poseFrame.hip?.location,
+            timestamp: poseFrame.timestamp.timeIntervalSince(swingStartTime ?? Date()),
+            confidence: calculateFrameConfidence(poseFrame)
+        )
+        
+        currentSwingFrames.append(frameData)
+        
+        // Limit frames to prevent memory issues (keep last 2 seconds at ~30fps)
+        if currentSwingFrames.count > 60 {
+            currentSwingFrames.removeFirst()
+        }
+    }
+    
+    func completeSwingRecording(forcedType: SwingType) {
+        guard currentSwingFrames.count >= 10 else { return } // Need minimum frames
+        
+        let labeledData = LabeledSwingData(
+            label: forcedType.rawValue,
+            poseFrames: currentSwingFrames,
+            sessionId: UUID(),
+            timestamp: Date()
+        )
+        
+        labeledTrainingData.append(labeledData)
+        
+        // Keep only last 50 labeled swings per type to manage memory
+        let typeCount = labeledTrainingData.filter { $0.label == forcedType.rawValue }.count
+        if typeCount > 50 {
+            if let firstIndex = labeledTrainingData.firstIndex(where: { $0.label == forcedType.rawValue }) {
+                labeledTrainingData.remove(at: firstIndex)
+            }
+        }
+        
+        saveTrainingData()
+        
+        // Reset for next swing
+        currentSwingFrames.removeAll()
+        swingStartTime = nil
+    }
+    
+    private func calculateFrameConfidence(_ poseFrame: PoseFrame) -> Float {
+        var totalConfidence: Float = 0
+        var count: Float = 0
+        
+        if let wrist = poseFrame.wrist {
+            totalConfidence += wrist.confidence
+            count += 1
+        }
+        if let elbow = poseFrame.elbow {
+            totalConfidence += elbow.confidence
+            count += 1
+        }
+        if let shoulder = poseFrame.shoulder {
+            totalConfidence += shoulder.confidence
+            count += 1
+        }
+        if let hip = poseFrame.hip {
+            totalConfidence += hip.confidence
+            count += 1
+        }
+        
+        return count > 0 ? totalConfidence / count : 0
+    }
+    
+    // MARK: - Training Data Persistence
+    
+    private func saveTrainingData() {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
+        do {
+            let data = try encoder.encode(labeledTrainingData)
+            UserDefaults.standard.set(data, forKey: "labeledTrainingData")
+        } catch {
+            print("Failed to save training data: \(error)")
+        }
+    }
+    
+    private func loadTrainingData() {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        if let data = UserDefaults.standard.data(forKey: "labeledTrainingData"),
+           let loadedData = try? decoder.decode([LabeledSwingData].self, from: data) {
+            labeledTrainingData = loadedData
+        }
+    }
+    
+    func exportTrainingData() -> Data? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .prettyPrinted
+        
+        return try? encoder.encode(labeledTrainingData)
+    }
+    
+    func getTrainingDataSummary() -> String {
+        let forehandCount = labeledTrainingData.filter { $0.label == "Forehand" }.count
+        let backhandCount = labeledTrainingData.filter { $0.label == "Backhand" }.count
+        let serveCount = labeledTrainingData.filter { $0.label == "Serve" }.count
+        
+        return "Training Data - FH: \(forehandCount), BH: \(backhandCount), S: \(serveCount)"
+    }
+    
+    func clearTrainingData() {
+        labeledTrainingData.removeAll()
+        UserDefaults.standard.removeObject(forKey: "labeledTrainingData")
+    }
+    
+    // MARK: - Original Pattern-Based Methods (kept for backward compatibility)
     
     func addCalibrationSwing(metrics: SwingMetrics, forcedType: SwingType) {
         guard metrics.path.count >= 2 else { return }
@@ -261,7 +410,7 @@ class SwingCalibrationData: ObservableObject {
     }
 }
 
-// MARK: - Calibration Camera View
+// MARK: - Data Collection Camera View (formerly Calibration Camera View)
 struct CalibrationCameraView: View {
     @ObservedObject var calibrationData: SwingCalibrationData
     @Binding var sessionData: SessionData?
@@ -269,12 +418,12 @@ struct CalibrationCameraView: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var currentSwingType: SwingType = .forehand
-    @State private var capturedCounts: [SwingType: Int] = [.forehand: 0, .backhand: 0, .serve: 0]
-    @State private var lastCapturedTime = Date()
+    @State private var showingShareSheet = false
+    @State private var exportURL: URL?
     
     var body: some View {
         ZStack {
-            // Regular camera view
+            // Camera view
             if viewModel.isSessionRunning {
                 GeometryReader { geometry in
                     CameraPreview(session: viewModel.captureSession)
@@ -297,17 +446,26 @@ struct CalibrationCameraView: View {
                     )
             }
             
-            // Calibration UI Overlay
+            // Data Collection UI Overlay
             VStack {
-                // Top bar with calibration info
+                // Top bar with data collection info
                 VStack(spacing: 10) {
-                    Text("CALIBRATION MODE")
+                    Text("SWING DATA COLLECTOR")
                         .font(.headline)
-                        .foregroundColor(.red)
+                        .foregroundColor(.white)
                         .padding(.horizontal)
                         .padding(.vertical, 5)
-                        .background(Color.white)
+                        .background(Color.blue)
                         .cornerRadius(10)
+                    
+                    // Data summary
+                    Text(viewModel.getCollectedSwingsSummary())
+                        .font(.caption)
+                        .foregroundColor(.green)
+                        .padding(.horizontal)
+                        .padding(.vertical, 3)
+                        .background(Color.white.opacity(0.9))
+                        .cornerRadius(8)
                     
                     // Swing type selector
                     Picker("Type", selection: $currentSwingType) {
@@ -317,18 +475,6 @@ struct CalibrationCameraView: View {
                     }
                     .pickerStyle(SegmentedPickerStyle())
                     .padding(.horizontal)
-                    
-                    // Current counts
-                    HStack(spacing: 20) {
-                        CalibrationCount(type: .forehand, count: capturedCounts[.forehand] ?? 0, isActive: currentSwingType == .forehand)
-                        CalibrationCount(type: .backhand, count: capturedCounts[.backhand] ?? 0, isActive: currentSwingType == .backhand)
-                        CalibrationCount(type: .serve, count: capturedCounts[.serve] ?? 0, isActive: currentSwingType == .serve)
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(10)
-                    .padding(.horizontal)
                 }
                 .padding(.top, 50)
                 
@@ -336,14 +482,42 @@ struct CalibrationCameraView: View {
                 
                 // Instructions
                 VStack(spacing: 10) {
-                    Text("Perform \(currentSwingType.rawValue) swings")
+                    Text("Perform a \(currentSwingType.rawValue) swing")
                         .font(.title2)
                         .bold()
                         .foregroundColor(.white)
                     
-                    Text("Each swing will be saved as a \(currentSwingType.rawValue)")
+                    Text("Press 'Record Swing', perform one swing, then press 'Stop'")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.8))
+                    
+                    // Recording status
+                    if viewModel.isCapturingSequence {
+                        HStack {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 12, height: 12)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.red, lineWidth: 2)
+                                        .scaleEffect(1.5)
+                                        .opacity(0.5)
+                                        .animation(
+                                            Animation.easeInOut(duration: 1)
+                                                .repeatForever(autoreverses: true),
+                                            value: viewModel.isCapturingSequence
+                                        )
+                                )
+                            Text("RECORDING SWING...")
+                                .font(.caption)
+                                .bold()
+                                .foregroundColor(.red)
+                        }
+                        .padding(.horizontal, 15)
+                        .padding(.vertical, 8)
+                        .background(Color.white)
+                        .cornerRadius(20)
+                    }
                     
                     if !viewModel.debugInfo.isEmpty {
                         Text(viewModel.debugInfo)
@@ -360,113 +534,132 @@ struct CalibrationCameraView: View {
                 .padding()
                 
                 // Control buttons
-                HStack(spacing: 20) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                    .padding()
-                    .background(Color.red)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                    
-                    Button(viewModel.isRecording ? "Stop" : "Start") {
-                        if viewModel.isRecording {
-                            sessionData = viewModel.stopRecording()
-                            dismiss()
+                VStack(spacing: 15) {
+                    // Primary recording control
+                    Button(viewModel.isCapturingSequence ? "Stop Swing" : "Record Swing") {
+                        if viewModel.isCapturingSequence {
+                            viewModel.stopAndSaveCaptureSequence(label: currentSwingType)
                         } else {
-                            startCalibrationRecording()
+                            viewModel.startCaptureSequence()
                         }
                     }
                     .padding()
-                    .frame(width: 120)
-                    .background(viewModel.isRecording ? Color.orange : Color.green)
+                    .frame(width: 200, height: 50)
+                    .background(viewModel.isCapturingSequence ? Color.red : Color.green)
                     .foregroundColor(.white)
-                    .cornerRadius(10)
+                    .font(.headline)
+                    .cornerRadius(15)
+                    .disabled(!viewModel.isSessionRunning)
                     
-                    Button("Done") {
-                        calibrationData.saveCalibration()
-                        dismiss()
+                    // Secondary controls
+                    HStack(spacing: 15) {
+                        Button("Export Data") {
+                            exportData()
+                        }
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                        .disabled(viewModel.collectedSwings.isEmpty)
+                        
+                        Button("Clear All") {
+                            viewModel.clearAllCollectedSwings()
+                        }
+                        .padding()
+                        .background(Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                        .disabled(viewModel.collectedSwings.isEmpty)
+                        
+                        Button("Done") {
+                            dismiss()
+                        }
+                        .padding()
+                        .background(Color.gray)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
                     }
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
-                    .opacity(hasMinimumCalibration() ? 1 : 0.5)
-                    .disabled(!hasMinimumCalibration())
                 }
                 .padding(.bottom, 30)
             }
         }
         .onAppear {
-            setupCalibrationMode()
+            setupDataCollectionMode()
         }
-    }
-    
-    private func setupCalibrationMode() {
-        viewModel.checkPermissions()
-        
-        // Set calibration mode
-        calibrationData.isCalibrating = true
-        calibrationData.calibratingType = currentSwingType
-        
-        // Override swing detection callback for calibration
-        viewModel.visionService.onSwingDetected = { [self] detectedType, duration in
-            // In calibration mode, we force the type to be what user selected
-            if Date().timeIntervalSince(lastCapturedTime) > 2.0 {  // Prevent rapid captures
-                
-                // Get the metrics from the vision service
-                if let metrics = viewModel.visionService.getSwingMetrics() {
-                    calibrationData.addCalibrationSwing(metrics: metrics, forcedType: currentSwingType)
-                    
-                    DispatchQueue.main.async {
-                        capturedCounts[currentSwingType, default: 0] += 1
-                        lastCapturedTime = Date()
-                        
-                        // Feedback
-                        viewModel.debugInfo = "\(currentSwingType.rawValue) captured! (\(capturedCounts[currentSwingType] ?? 0)/5)"
-                        
-                        // Haptic feedback
-                        let impact = UIImpactFeedbackGenerator(style: .heavy)  // Changed from .success to .heavy
-                        impact.impactOccurred()
-                        
-                        AudioServicesPlaySystemSound(1057) // Success sound
-                    }
-                }
+        .sheet(isPresented: $showingShareSheet) {
+            if let url = exportURL {
+                ShareSheet(items: [url])
             }
         }
     }
     
-    private func startCalibrationRecording() {
-        viewModel.startRecording()
+    private func setupDataCollectionMode() {
+        viewModel.checkPermissions()
+        
+        // Enable debug mode for better feedback
+        viewModel.enableDebugMode(true)
+        
+        // Start the camera session immediately
+        if !viewModel.isRecording {
+            viewModel.startRecording()
+        }
     }
     
-    private func hasMinimumCalibration() -> Bool {
-        return (capturedCounts[.forehand] ?? 0) >= 3 &&
-               (capturedCounts[.backhand] ?? 0) >= 3 &&
-               (capturedCounts[.serve] ?? 0) >= 3
+    // MARK: - Data Export Function
+    private func exportData() {
+        guard !viewModel.collectedSwings.isEmpty else {
+            viewModel.debugInfo = "No data to export"
+            return
+        }
+        
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .prettyPrinted
+        
+        do {
+            let data = try encoder.encode(viewModel.collectedSwings)
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let timestamp = DateFormatter().string(from: Date())
+            let filename = "swing_data_\(timestamp.replacingOccurrences(of: " ", with: "_")).json"
+            let fileURL = documents.appendingPathComponent(filename)
+            
+            try data.write(to: fileURL)
+            
+            print("Successfully exported to \(fileURL)")
+            viewModel.debugInfo = "✅ Exported \(viewModel.collectedSwings.count) swings to Files app!"
+            
+            // Prepare for sharing
+            exportURL = fileURL
+            showingShareSheet = true
+            
+            // Also print summary to console for development
+            printDataSummary()
+            
+        } catch {
+            print("Error exporting data: \(error)")
+            viewModel.debugInfo = "❌ Export failed: \(error.localizedDescription)"
+        }
+    }
+    
+    private func printDataSummary() {
+        print("\n=== SWING DATA EXPORT SUMMARY ===")
+        print("Total swings collected: \(viewModel.collectedSwings.count)")
+        
+        let forehandCount = viewModel.collectedSwings.filter { $0.label == "Forehand" }.count
+        let backhandCount = viewModel.collectedSwings.filter { $0.label == "Backhand" }.count
+        let serveCount = viewModel.collectedSwings.filter { $0.label == "Serve" }.count
+        
+        print("Breakdown:")
+        print("  Forehand: \(forehandCount)")
+        print("  Backhand: \(backhandCount)")
+        print("  Serve: \(serveCount)")
+        
+        if let firstSwing = viewModel.collectedSwings.first {
+            print("Sample swing info:")
+            print("  Frames per swing: \(firstSwing.poseFrames.count)")
+            print("  Duration: \(firstSwing.poseFrames.last?.timestamp ?? 0) seconds")
+        }
+        print("================================\n")
     }
 }
 
-struct CalibrationCount: View {
-    let type: SwingType
-    let count: Int
-    let isActive: Bool
-    
-    var body: some View {
-        VStack {
-            Text(type.rawValue)
-                .font(.caption)
-                .foregroundColor(isActive ? .yellow : .white)
-            
-            ZStack {
-                Circle()
-                    .stroke(isActive ? Color.yellow : Color.gray, lineWidth: 2)
-                    .frame(width: 40, height: 40)
-                
-                Text("\(count)")
-                    .font(.headline)
-                    .foregroundColor(count >= 3 ? .green : .white)
-            }
-        }
-    }
-}
