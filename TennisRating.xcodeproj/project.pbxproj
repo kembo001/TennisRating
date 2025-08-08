@@ -29,9 +29,22 @@
 		9CDB5C662E426BA400CF9180 /* TennisRatingUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TennisRatingUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		9C4EE8AB2E45C0E10003BEF5 /* Exceptions for "TennisRating" folder in "TennisRating" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 9CDB5C4E2E426BA300CF9180 /* TennisRating */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		9CDB5C512E426BA300CF9180 /* TennisRating */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				9C4EE8AB2E45C0E10003BEF5 /* Exceptions for "TennisRating" folder in "TennisRating" target */,
+			);
 			path = TennisRating;
 			sourceTree = "<group>";
 		};
@@ -380,6 +393,7 @@
 				DEVELOPMENT_TEAM = 588T948W63;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TennisRating/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access to record your tennis practice sessions";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "This app saves screenshots of your results to your photo library";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -411,6 +425,7 @@
 				DEVELOPMENT_TEAM = 588T948W63;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TennisRating/Info.plist;
 				INFOPLIST_KEY_NSCameraUsageDescription = "This app needs camera access to record your tennis practice sessions";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "This app saves screenshots of your results to your photo library";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

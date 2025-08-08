@@ -17,8 +17,8 @@ class AuthManager: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    // Enable mock mode when server isn't available
-    @Published var useMockData = true // Set to false when Reid's server is ready
+    // Enable real server mode now that Reid's backend is ready!
+    @Published var useMockData = false // Changed from true to false
     
     private let networkManager = NetworkManager.shared
     
