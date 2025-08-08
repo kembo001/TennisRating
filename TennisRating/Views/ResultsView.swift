@@ -4,6 +4,8 @@ struct ResultsView: View {
     let sessionData: SessionData
     @Environment(\.dismiss) private var dismiss
     @State private var showShareSheet = false
+    @StateObject private var uploadManager = SessionUploadManager.shared
+    @StateObject private var authManager = AuthManager.shared
     
     var body: some View {
         NavigationView {
@@ -23,6 +25,9 @@ struct ResultsView: View {
                     }
                 }
                 .padding(.top, 20)
+                
+                // Upload Status Section
+                uploadStatusSection
                 
                 // Stats
                 VStack(spacing: 20) {
@@ -94,31 +99,7 @@ struct ResultsView: View {
                 Spacer()
                 
                 // Action buttons
-                HStack(spacing: 20) {
-                    Button(action: {
-                        showShareSheet = true
-                    }) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                    }
-                    
-                    Button(action: {
-                        dismiss()
-                    }) {
-                        Label("Done", systemImage: "checkmark.circle")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.green)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.bottom)
+                actionButtons
             }
             .navigationTitle("Practice Results")
             .navigationBarTitleDisplayMode(.large)
@@ -126,8 +107,241 @@ struct ResultsView: View {
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: [createShareImage()])
         }
+        .alert("Upload Status", isPresented: $uploadManager.showUploadAlert) {
+            Button("OK") {
+                uploadManager.showUploadAlert = false
+            }
+            
+            if case .failed = uploadManager.uploadStatus {
+                Button("Retry") {
+                    Task {
+                        await uploadManager.uploadSession(sessionData)
+                    }
+                }
+            }
+        } message: {
+            Text(uploadAlertMessage)
+        }
+        .onAppear {
+            // Auto-upload if user is logged in and it's a good session
+            if authManager.isAuthenticated && sessionData.totalShots >= 5 {
+                uploadManager.autoUploadSession(sessionData)
+            }
+        }
     }
     
+    // MARK: - Upload Status Section
+    @ViewBuilder
+    private var uploadStatusSection: some View {
+        if authManager.isAuthenticated {
+            VStack(spacing: 10) {
+                switch uploadManager.uploadStatus {
+                case .idle:
+                    EmptyView()
+                    
+                case .uploading:
+                    HStack {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                            .scaleEffect(0.8)
+                        
+                        VStack(alignment: .leading) {
+                            Text("Uploading Session...")
+                                .font(.caption)
+                                .bold()
+                            
+                            ProgressView(value: uploadManager.uploadProgress)
+                                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
+                                .frame(width: 150)
+                        }
+                    }
+                    .padding()
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(10)
+                    
+                case .success(let sessionId):
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        
+                        VStack(alignment: .leading) {
+                            Text("Session Uploaded!")
+                                .font(.caption)
+                                .bold()
+                                .foregroundColor(.green)
+                            
+                            if authManager.useMockData {
+                                Text("ID: \(sessionId)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color.green.opacity(0.1))
+                    .cornerRadius(10)
+                    
+                case .failed(let error):
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        
+                        VStack(alignment: .leading) {
+                            Text("Upload Failed")
+                                .font(.caption)
+                                .bold()
+                                .foregroundColor(.orange)
+                            
+                            Text("Saved for retry")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Button("Retry") {
+                            Task {
+                                await uploadManager.uploadSession(sessionData)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    }
+                    .padding()
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(10)
+                    
+                case .retry:
+                    EmptyView()
+                }
+            }
+            .padding(.horizontal)
+        } else {
+            // Show login prompt for better uploads
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "person.circle")
+                        .foregroundColor(.blue)
+                    
+                    Text("Sign in to save your progress")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+                
+                Text("Sessions will be uploaded automatically")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(10)
+            .padding(.horizontal)
+        }
+    }
+    
+    // MARK: - Action Buttons
+    private var actionButtons: some View {
+        VStack(spacing: 15) {
+            HStack(spacing: 20) {
+                Button(action: {
+                    showShareSheet = true
+                }) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+                
+                // Manual upload button (if not auto-uploaded or failed)
+                if authManager.isAuthenticated {
+                    Button(action: {
+                        Task {
+                            await uploadManager.uploadSession(sessionData)
+                        }
+                    }) {
+                        Label(uploadButtonText, systemImage: uploadButtonIcon)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(uploadButtonColor)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .disabled(uploadManager.uploadStatus == .uploading)
+                }
+            }
+            
+            Button(action: {
+                dismiss()
+            }) {
+                Label("Done", systemImage: "checkmark.circle")
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.green)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.bottom)
+    }
+    
+    // MARK: - Upload Button Properties
+    private var uploadButtonText: String {
+        switch uploadManager.uploadStatus {
+        case .uploading:
+            return "Uploading..."
+        case .success:
+            return "Re-upload"
+        case .failed:
+            return "Retry Upload"
+        default:
+            return "Upload Session"
+        }
+    }
+    
+    private var uploadButtonIcon: String {
+        switch uploadManager.uploadStatus {
+        case .uploading:
+            return "arrow.up.circle"
+        case .success:
+            return "arrow.clockwise"
+        case .failed:
+            return "exclamationmark.arrow.triangle.2.circlepath"
+        default:
+            return "icloud.and.arrow.up"
+        }
+    }
+    
+    private var uploadButtonColor: Color {
+        switch uploadManager.uploadStatus {
+        case .success:
+            return .gray
+        case .failed:
+            return .orange
+        default:
+            return .blue
+        }
+    }
+    
+    // MARK: - Upload Alert Message
+    private var uploadAlertMessage: String {
+        switch uploadManager.uploadStatus {
+        case .success(let sessionId):
+            if authManager.useMockData {
+                return "Session uploaded successfully!\nDemo ID: \(sessionId)"
+            } else {
+                return "Session uploaded successfully!"
+            }
+        case .failed(let error):
+            return "Upload failed: \(error)\n\nYour session has been saved and will be retried automatically."
+        default:
+            return ""
+        }
+    }
+    
+    // MARK: - Existing Methods (unchanged)
     func getFeedbackMessage() -> String {
         switch sessionData.rating {
         case 5:

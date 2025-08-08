@@ -381,6 +381,8 @@ struct RoundedTextFieldStyle: TextFieldStyle {
 // MARK: - User Profile View (for testing authenticated state)
 struct UserProfileView: View {
     @StateObject private var authManager = AuthManager.shared
+    @StateObject private var uploadManager = SessionUploadManager.shared
+    @State private var showingUploadManager = false
     
     var body: some View {
         VStack(spacing: 20) {
@@ -399,7 +401,38 @@ struct UserProfileView: View {
                         .foregroundColor(.secondary)
                 }
                 
+                // Upload Statistics Card
+                uploadStatsCard
+                
                 Spacer()
+                
+                // Upload Manager Button
+                Button(action: {
+                    showingUploadManager = true
+                }) {
+                    HStack {
+                        Image(systemName: "icloud.and.arrow.up")
+                        Text("Manage Uploads")
+                        Spacer()
+                        
+                        if uploadManager.pendingUploads.count > 0 {
+                            Text("\(uploadManager.pendingUploads.count)")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.orange)
+                                .foregroundColor(.white)
+                                .clipShape(Capsule())
+                        }
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                    }
+                    .padding()
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(12)
+                }
+                .foregroundColor(.blue)
                 
                 // Server Mode Toggle (remove in production)
                 if authManager.useMockData {
@@ -446,6 +479,62 @@ struct UserProfileView: View {
         }
         .padding()
         .navigationTitle("Profile")
+        .sheet(isPresented: $showingUploadManager) {
+            UploadManagerView()
+        }
+    }
+    
+    // MARK: - Upload Stats Card
+    private var uploadStatsCard: some View {
+        let stats = uploadManager.uploadStats
+        
+        return VStack(spacing: 10) {
+            Text("Session Data")
+                .font(.headline)
+                .foregroundColor(.secondary)
+            
+            HStack(spacing: 20) {
+                VStack {
+                    Text("\(stats.uploadedSessions)")
+                        .font(.title2)
+                        .bold()
+                        .foregroundColor(.green)
+                    Text("Uploaded")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack {
+                    Text("\(stats.pendingSessions)")
+                        .font(.title2)
+                        .bold()
+                        .foregroundColor(.orange)
+                    Text("Pending")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack {
+                    Text("\(stats.successRatePercentage)%")
+                        .font(.title2)
+                        .bold()
+                        .foregroundColor(.blue)
+                    Text("Success Rate")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            if stats.pendingSessions > 0 {
+                Text("Tap 'Manage Uploads' to sync pending sessions")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding()
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(12)
     }
 }
 
