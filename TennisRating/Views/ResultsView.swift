@@ -6,6 +6,7 @@ struct ResultsView: View {
     @State private var showShareSheet = false
     @StateObject private var uploadManager = SessionUploadManager.shared
     @StateObject private var authManager = AuthManager.shared
+    @StateObject private var historyManager = SessionHistoryManager.shared
     
     var body: some View {
         NavigationView {
@@ -123,6 +124,9 @@ struct ResultsView: View {
             Text(uploadAlertMessage)
         }
         .onAppear {
+            // Save session to history
+            historyManager.saveSessionLocally(sessionData)
+            
             // Auto-upload if user is logged in and it's a good session
             if authManager.isAuthenticated && sessionData.totalShots >= 5 {
                 uploadManager.autoUploadSession(sessionData)

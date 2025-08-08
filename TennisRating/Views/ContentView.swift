@@ -234,60 +234,13 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Placeholder Views for Future Implementation
-    
+    // History Tab - Now with real functionality
     private var sessionHistoryView: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Image(systemName: "list.bullet.clipboard")
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray)
-                
-                Text("Session History")
-                    .font(.title2)
-                    .bold()
-                
-                Text("Coming Soon!")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                Text("View your past practice sessions and track your progress over time.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                
-                Spacer()
-            }
-            .navigationTitle("History")
-        }
+        SessionHistoryView()
     }
     
     private var statsView: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.gray)
-                
-                Text("Statistics")
-                    .font(.title2)
-                    .bold()
-                
-                Text("Coming Soon!")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                Text("Analyze your performance with detailed charts and insights.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                
-                Spacer()
-            }
-            .navigationTitle("Stats")
-        }
+        StatisticsDashboardView()
     }
     
     private var profileView: some View {
