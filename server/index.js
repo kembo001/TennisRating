@@ -3,6 +3,10 @@ const cors = require('cors');
 const helmet = require('helmet');
 require('dotenv').config();
 
+// Initialize database
+const getDatabase = require('./database');
+const db = getDatabase(); // This will create tables if they don't exist
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
